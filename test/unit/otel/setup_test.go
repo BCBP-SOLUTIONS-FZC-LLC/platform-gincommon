@@ -58,3 +58,21 @@ func TestInit_ValidConfigSetsTracerProvider(t *testing.T) {
 		t.Fatal("expected tracer provider to be set")
 	}
 }
+
+func TestInitTelemetry_WithBaggage(t *testing.T) {
+	otel.Shutdown()
+	t.Cleanup(otel.Shutdown)
+
+	shutdown := otel.InitTelemetry("baggage-svc", "1.0.0", otel.TelemetryConfig{
+		Endpoint:      "",
+		Insecure:      true,
+		SampleRatio:   1.0,
+		EnableBaggage: true,
+	})
+	if shutdown == nil {
+		t.Fatal("expected non-nil shutdown func")
+	}
+	if _, ok := gootel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
+		t.Fatalf("tracer provider type = %T, want *sdktrace.TracerProvider", gootel.GetTracerProvider())
+	}
+}

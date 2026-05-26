@@ -173,3 +173,48 @@ func TestRequestContext_ReturnsFalseOnTypeMismatch(t *testing.T) {
 		t.Fatalf("RequestContext() = %v, want nil for type mismatch", got)
 	}
 }
+
+func TestObservabilityMiddlewares_WithTracingOverrides(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	log, err := logger.NewLogger("dev")
+	if err != nil {
+		t.Fatalf("logger: %v", err)
+	}
+
+	insecure := true
+	ratio := 0.5
+	baggage := true
+
+	mw := gincommon.ObservabilityMiddlewares(gincommon.Config{
+		Logger:       log,
+		ServiceName:  "tracing-overrides-test",
+		BuildVersion: "test",
+		Tracing: &gincommon.TracingOptions{
+			Endpoint:      "localhost:4317",
+			Insecure:      &insecure,
+			SampleRatio:   &ratio,
+			EnableBaggage: &baggage,
+		},
+	})
+	if len(mw) == 0 {
+		t.Fatal("expected middleware chain")
+	}
+}
+
+func TestObservabilityMiddlewares_WithEmptyTracingOptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	log, err := logger.NewLogger("dev")
+	if err != nil {
+		t.Fatalf("logger: %v", err)
+	}
+
+	mw := gincommon.ObservabilityMiddlewares(gincommon.Config{
+		Logger:       log,
+		ServiceName:  "empty-tracing-options",
+		BuildVersion: "test",
+		Tracing:      &gincommon.TracingOptions{},
+	})
+	if len(mw) == 0 {
+		t.Fatal("expected middleware chain")
+	}
+}

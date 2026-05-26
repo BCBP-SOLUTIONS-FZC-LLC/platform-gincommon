@@ -18,3 +18,17 @@ func TestInit_RegistersGRPCMetrics(t *testing.T) {
 
 	metrics.RecordGRPC("/pkg.Service/Method", 0.05, "OK", "2xx", "success", 128, 256)
 }
+
+func TestRecordGRPCRateLimited_NilSafe(t *testing.T) {
+	saved := metrics.GrpcRateLimitedRequestsTotal
+	metrics.GrpcRateLimitedRequestsTotal = nil
+	defer func() { metrics.GrpcRateLimitedRequestsTotal = saved }()
+	metrics.RecordGRPCRateLimited("/test.Service/Method") // must not panic when nil
+}
+
+func TestRecordGRPC_NilSafe(t *testing.T) {
+	saved := metrics.GrpcRequestsTotal
+	metrics.GrpcRequestsTotal = nil
+	defer func() { metrics.GrpcRequestsTotal = saved }()
+	metrics.RecordGRPC("/test.Service/Method", 0.01, "OK", "2xx", "success", 0, 0) // must not panic when nil
+}

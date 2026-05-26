@@ -10,9 +10,38 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+// testServerStream is a minimal grpc.ServerStream for unit tests.
+type testServerStream struct {
+	ctx      context.Context
+	recvErr  error
+	sendErr  error
+}
+
+func (s *testServerStream) SetHeader(metadata.MD) error  { return nil }
+func (s *testServerStream) SendHeader(metadata.MD) error { return nil }
+func (s *testServerStream) SetTrailer(metadata.MD)       {}
+func (s *testServerStream) Context() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}
+func (s *testServerStream) SendMsg(any) error { return s.sendErr }
+func (s *testServerStream) RecvMsg(any) error { return s.recvErr }
+
+// grpcOKError wraps a gRPC status with code OK but is itself non-nil,
+// exercising the defensive `code == OK && err != nil` branch in observeGRPC.
+type grpcOKError struct{}
+
+func (grpcOKError) Error() string { return "artificial ok-status error" }
+func (grpcOKError) GRPCStatus() *status.Status {
+	return status.New(codes.OK, "artificial")
+}
 
 func TestUnaryMetricsInterceptor_RecordsSuccess(t *testing.T) {
 	metrics.Init("grpc-interceptor-test", "test")
@@ -112,5 +141,148 @@ func TestDefaultStreamInterceptors_NotEmpty(t *testing.T) {
 	ics := grpccommon.DefaultStreamInterceptors(grpccommon.Config{ServiceName: "pkg-grpc-stream"})
 	if len(ics) == 0 {
 		t.Fatal("expected stream interceptors")
+	}
+}
+
+func TestStreamMetricsInterceptor_RecordsSuccess(t *testing.T) {
+	metrics.Init("grpc-stream-success", "test")
+	ic := grpcmw.StreamMetricsInterceptor()
+
+	stream := &testServerStream{ctx: context.Background()}
+	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/BidiStream"}
+
+	err := ic(
+		nil,
+		stream,
+		info,
+		func(srv any, ss grpc.ServerStream) error {
+			_ = ss.RecvMsg(&emptypb.Empty{})
+			_ = ss.SendMsg(&emptypb.Empty{})
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("stream interceptor err: %v", err)
+	}
+
+	counter, cerr := metrics.GrpcRequestsTotal.GetMetricWithLabelValues(
+		"/test.Service/BidiStream", "OK", "2xx", "success",
+	)
+	if cerr != nil {
+		t.Fatalf("get metric: %v", cerr)
+	}
+	if got := testutil.ToFloat64(counter); got != 1 {
+		t.Fatalf("grpc_requests_total stream = %v, want 1", got)
+	}
+}
+
+func TestStreamMetricsInterceptor_RecordsError(t *testing.T) {
+	metrics.Init("grpc-stream-err", "test")
+	ic := grpcmw.StreamMetricsInterceptor()
+
+	stream := &testServerStream{ctx: context.Background()}
+	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/ErrStream"}
+
+	err := ic(
+		nil,
+		stream,
+		info,
+		func(srv any, ss grpc.ServerStream) error {
+			return status.Error(codes.Internal, "stream failed")
+		},
+	)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal", status.Code(err))
+	}
+}
+
+func TestStreamMetricsInterceptor_NilSafe(t *testing.T) {
+	saved := metrics.GrpcInflight
+	metrics.GrpcInflight = nil
+	defer func() { metrics.GrpcInflight = saved }()
+
+	ic := grpcmw.StreamMetricsInterceptor()
+	stream := &testServerStream{}
+	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/Stream"}
+	if err := ic(nil, stream, info, func(srv any, ss grpc.ServerStream) error { return nil }); err != nil {
+		t.Fatalf("nil guard err: %v", err)
+	}
+}
+
+func TestUnaryMetricsInterceptor_NilSafe(t *testing.T) {
+	saved := metrics.GrpcInflight
+	metrics.GrpcInflight = nil
+	defer func() { metrics.GrpcInflight = saved }()
+
+	ic := grpcmw.UnaryMetricsInterceptor()
+	_, err := ic(
+		context.Background(),
+		&emptypb.Empty{},
+		&grpc.UnaryServerInfo{FullMethod: "/test.Service/Ping"},
+		func(ctx context.Context, in any) (any, error) { return &emptypb.Empty{}, nil },
+	)
+	if err != nil {
+		t.Fatalf("nil guard err: %v", err)
+	}
+}
+
+func TestStreamMetricsInterceptor_RecvMsgError(t *testing.T) {
+	metrics.Init("grpc-stream-recv-err", "test")
+	ic := grpcmw.StreamMetricsInterceptor()
+
+	recvErr := status.Error(codes.Unavailable, "recv failed")
+	stream := &testServerStream{ctx: context.Background(), recvErr: recvErr}
+	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/RecvErr"}
+
+	handlerErr := ic(
+		nil,
+		stream,
+		info,
+		func(srv any, ss grpc.ServerStream) error {
+			return ss.RecvMsg(&emptypb.Empty{})
+		},
+	)
+	if status.Code(handlerErr) != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", status.Code(handlerErr))
+	}
+}
+
+func TestStreamMetricsInterceptor_SendMsgError(t *testing.T) {
+	metrics.Init("grpc-stream-send-err", "test")
+	ic := grpcmw.StreamMetricsInterceptor()
+
+	sendErr := status.Error(codes.ResourceExhausted, "send failed")
+	stream := &testServerStream{ctx: context.Background(), sendErr: sendErr}
+	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/SendErr"}
+
+	handlerErr := ic(
+		nil,
+		stream,
+		info,
+		func(srv any, ss grpc.ServerStream) error {
+			return ss.SendMsg(&emptypb.Empty{})
+		},
+	)
+	if status.Code(handlerErr) != codes.ResourceExhausted {
+		t.Fatalf("code = %v, want ResourceExhausted", status.Code(handlerErr))
+	}
+}
+
+func TestUnaryMetricsInterceptor_OKStatusWithNonNilError(t *testing.T) {
+	metrics.Init("grpc-ok-err", "test")
+	ic := grpcmw.UnaryMetricsInterceptor()
+
+	// grpcOKError has GRPCStatus() code=OK but is a non-nil error,
+	// exercising the `code == OK && err != nil → code = Unknown` path in observeGRPC.
+	_, err := ic(
+		context.Background(),
+		&emptypb.Empty{},
+		&grpc.UnaryServerInfo{FullMethod: "/test.Service/OKErr"},
+		func(ctx context.Context, in any) (any, error) {
+			return nil, grpcOKError{}
+		},
+	)
+	if err == nil {
+		t.Fatal("expected non-nil error from grpcOKError handler")
 	}
 }

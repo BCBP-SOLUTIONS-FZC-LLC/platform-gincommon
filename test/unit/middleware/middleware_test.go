@@ -126,7 +126,7 @@ func TestPanicRecoveryMiddleware_RecordsPanicAndReturns500(t *testing.T) {
 	r.Use(
 		middleware.PanicRecoveryMiddleware(log),
 		middleware.RequestIDMiddleware(),
-		middleware.MetricsMiddleware(),
+		middleware.MetricsMiddleware(nil),
 	)
 	r.GET("/panic", func(c *gin.Context) { panic("boom") })
 
@@ -229,7 +229,7 @@ func TestPanicRecoveryMiddleware_WithTracing_IncludesTraceIDInResponseAndLog(t *
 		middleware.PanicRecoveryMiddleware(log),
 		middleware.RequestIDMiddleware(),
 		middleware.TracingMiddleware(),
-		middleware.MetricsMiddleware(),
+		middleware.MetricsMiddleware(nil),
 	)
 	r.GET("/panic", func(c *gin.Context) { panic("boom") })
 
@@ -352,7 +352,7 @@ func TestMetricsMiddleware_RecordsRateLimitedOn429(t *testing.T) {
 	metrics.Init("svc-rl", "test")
 
 	r := gin.New()
-	r.Use(middleware.MetricsMiddleware())
+	r.Use(middleware.MetricsMiddleware(nil))
 	r.GET("/limited", func(c *gin.Context) {
 		c.Status(http.StatusTooManyRequests)
 	})
@@ -379,7 +379,7 @@ func TestMetricsMiddleware_KnownRoute(t *testing.T) {
 	metrics.Init("svc-metrics", "test")
 
 	r := gin.New()
-	r.Use(middleware.MetricsMiddleware())
+	r.Use(middleware.MetricsMiddleware(nil))
 	r.GET("/known", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/known", nil)
@@ -396,7 +396,7 @@ func TestMetricsMiddleware_RecordsPayloadSizes(t *testing.T) {
 	metrics.Init("svc-size", "test")
 
 	r := gin.New()
-	r.Use(middleware.MetricsMiddleware())
+	r.Use(middleware.MetricsMiddleware(nil))
 	r.POST("/upload", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
@@ -419,7 +419,7 @@ func TestMetricsMiddleware_NoBodyResponseSizeNonNegative(t *testing.T) {
 	metrics.Init("svc-nobody", "test")
 
 	r := gin.New()
-	r.Use(middleware.MetricsMiddleware())
+	r.Use(middleware.MetricsMiddleware(nil))
 	r.GET("/empty", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 
 	req := httptest.NewRequest(http.MethodGet, "/empty", nil)
@@ -446,7 +446,7 @@ func TestMetricsMiddleware_NilSafe_WithoutInit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	r := gin.New()
-	r.Use(middleware.MetricsMiddleware())
+	r.Use(middleware.MetricsMiddleware(nil))
 	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
@@ -464,7 +464,7 @@ func TestMetricsMiddleware_UnknownRoute(t *testing.T) {
 	metrics.Init("svc-unknown", "test")
 
 	r := gin.New()
-	r.Use(middleware.MetricsMiddleware())
+	r.Use(middleware.MetricsMiddleware(nil))
 	r.NoRoute(func(c *gin.Context) { c.Status(http.StatusNotFound) })
 
 	req := httptest.NewRequest(http.MethodPost, "/missing", nil)
@@ -486,13 +486,72 @@ func TestMetricsMiddleware_UnknownRoute(t *testing.T) {
 	}
 }
 
+func TestAuthZMiddleware_ContextMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	auth := service.NewRBACService()
+	r := gin.New()
+	// AuthZMiddleware without ContextMiddleware → no request context in gin context
+	r.Use(middleware.AuthZMiddleware(auth, "read", "doc", nil))
+	r.GET("/doc", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/doc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (context missing)", w.Code)
+	}
+}
+
+func TestAuthZMiddleware_ContextWrongType(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	auth := service.NewRBACService()
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRequestContextKey, "wrong-type")
+		c.Next()
+	})
+	r.Use(middleware.AuthZMiddleware(auth, "read", "doc", nil))
+	r.GET("/doc", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/doc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (wrong context type)", w.Code)
+	}
+}
+
+func TestMetricsMiddleware_NilActiveRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := metrics.HttpActiveRequests
+	metrics.HttpActiveRequests = nil
+	defer func() { metrics.HttpActiveRequests = saved }()
+
+	r := gin.New()
+	r.Use(middleware.MetricsMiddleware(nil))
+	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
+
 func authzTestRouter(t *testing.T, auth port.Authorizer, action, resource, method, path string, handler gin.HandlerFunc) *gin.Engine {
 	t.Helper()
 	r := gin.New()
 	r.Use(
 		middleware.RequireAuth(),
 		middleware.ContextMiddleware(service.NewContextService()),
-		middleware.AuthZMiddleware(auth, action, resource),
+		middleware.AuthZMiddleware(auth, action, resource, nil),
 	)
 	r.Handle(method, path, handler)
 	return r

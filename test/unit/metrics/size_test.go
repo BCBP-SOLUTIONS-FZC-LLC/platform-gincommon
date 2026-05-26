@@ -38,3 +38,12 @@ func TestInit_RegistersSizeHistograms(t *testing.T) {
 	metrics.HttpRequestSizeBytes.WithLabelValues("POST", "/upload", "2xx", "success").Observe(1024)
 	metrics.HttpResponseSizeBytes.WithLabelValues("POST", "/upload", "2xx", "success").Observe(256)
 }
+
+func TestProtoMessageSize_NonProtoValue_ReturnsZero(t *testing.T) {
+	if got := metrics.ProtoMessageSize("not a proto message"); got != 0 {
+		t.Fatalf("ProtoMessageSize(string) = %v, want 0", got)
+	}
+	if got := metrics.ProtoMessageSize(42); got != 0 {
+		t.Fatalf("ProtoMessageSize(int) = %v, want 0", got)
+	}
+}

@@ -98,3 +98,37 @@ func TestOtelTraceSampleRatio_InvalidInProdFallsBackTo01(t *testing.T) {
 		t.Fatalf("OtelTraceSampleRatio() invalid in prod = %v, want fallback 0.1", got)
 	}
 }
+
+func TestOtelExporterInsecure_ExplicitTrue(t *testing.T) {
+	for _, v := range []string{"true", "1", "yes"} {
+		t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", v)
+		if !config.OtelExporterInsecure() {
+			t.Fatalf("OtelExporterInsecure() = false for %q, want true", v)
+		}
+	}
+}
+
+func TestOtelExporterInsecure_ExplicitFalse(t *testing.T) {
+	for _, v := range []string{"false", "0", "no"} {
+		t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", v)
+		if config.OtelExporterInsecure() {
+			t.Fatalf("OtelExporterInsecure() = true for %q, want false", v)
+		}
+	}
+}
+
+func TestOtelEnableBaggage_ExplicitTrue(t *testing.T) {
+	for _, v := range []string{"true", "1", "yes"} {
+		t.Setenv("OTEL_PROPAGATOR_BAGGAGE", v)
+		if !config.OtelEnableBaggage() {
+			t.Fatalf("OtelEnableBaggage() = false for %q, want true", v)
+		}
+	}
+}
+
+func TestGetenvInt_EmptyEnvVar(t *testing.T) {
+	t.Setenv("APP_PORT", "")
+	if got := config.AppPort(); got != 8080 {
+		t.Fatalf("AppPort() with empty env = %d, want default 8080", got)
+	}
+}

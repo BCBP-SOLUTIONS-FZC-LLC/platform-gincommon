@@ -39,7 +39,11 @@ type TracingOptions struct {
 }
 
 // ObservabilityMiddlewares returns panic recovery, tracing, metrics, and logging (no auth).
+// It panics if cfg.ServiceName is empty, as an empty service name produces invalid Prometheus labels.
 func ObservabilityMiddlewares(cfg Config) []gin.HandlerFunc {
+	if cfg.ServiceName == "" {
+		panic("gincommon.Config.ServiceName is required")
+	}
 	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
 
 	version := cfg.BuildVersion
@@ -54,7 +58,7 @@ func ObservabilityMiddlewares(cfg Config) []gin.HandlerFunc {
 		middleware.RequestIDMiddleware(),
 		middleware.TracingMiddleware(),
 		middleware.CorrelationHeadersMiddleware(),
-		middleware.MetricsMiddleware(),
+		middleware.MetricsMiddleware(cfg.Logger),
 		middleware.LoggingMiddleware(cfg.Logger),
 	}
 }

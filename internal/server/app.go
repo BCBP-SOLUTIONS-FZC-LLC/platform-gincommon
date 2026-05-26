@@ -1,6 +1,9 @@
 package server
 
 import (
+	"log"
+	"os"
+
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
@@ -12,7 +15,9 @@ import (
 // Setup loads environment, initializes OpenTelemetry, configures Gin, and returns the HTTP router.
 // Call the returned shutdown function on process exit (e.g. defer shutdown() in main).
 func Setup() (*gin.Engine, func(), error) {
-	_ = godotenv.Load()
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("warn: .env parse error: %v", err)
+	}
 
 	shutdownTracing := gincommon.InitTracingFromEnv()
 

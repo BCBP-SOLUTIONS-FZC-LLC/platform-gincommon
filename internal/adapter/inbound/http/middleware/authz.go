@@ -18,25 +18,52 @@ const (
 )
 
 // AuthZMiddleware authorizes the request using requestContext (requires ContextMiddleware).
-func AuthZMiddleware(auth port.Authorizer, action, resource string) gin.HandlerFunc {
+// Pass a non-nil logger to emit audit log entries for denials; pass nil to skip logging.
+func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		ctxVal, ok := c.Get(CtxRequestContextKey)
 		if !ok {
+			if logger != nil {
+				logger.Error("authz: request context missing", map[string]any{
+					"action": action, "resource": resource,
+				})
+			}
 			writeJSONError(c, http.StatusInternalServerError, ErrCtxMissing)
 			return
 		}
 
 		ctx, ok := ctxVal.(*domain.RequestContext)
 		if !ok {
+			if logger != nil {
+				logger.Error("authz: invalid request context type", map[string]any{
+					"action": action, "resource": resource,
+				})
+			}
 			writeJSONError(c, http.StatusInternalServerError, ErrCtxInvalid)
 			return
 		}
 
 		if err := auth.Authorize(ctx.UserID, ctx.Roles, action, resource); err != nil {
 			if errors.Is(err, domain.ErrForbidden) {
+				if logger != nil {
+					logger.Warn("authz: access denied", map[string]any{
+						"user_id":  ctx.UserID,
+						"roles":    ctx.Roles,
+						"action":   action,
+						"resource": resource,
+					})
+				}
 				writeJSONError(c, http.StatusForbidden, ErrForbidden)
 				return
+			}
+			if logger != nil {
+				logger.Error("authz: internal authorization error", map[string]any{
+					"user_id":  ctx.UserID,
+					"action":   action,
+					"resource": resource,
+					"error":    err.Error(),
+				})
 			}
 			writeJSONError(c, http.StatusInternalServerError, ErrInternal)
 			return

@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -65,16 +66,16 @@ func EnsureInitTelemetry(service, version string, cfg TelemetryConfig) {
 func initTracing(service, version string, cfg TelemetryConfig) func() {
 	ctx := context.Background()
 
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+	svcRes, _ := resource.New(ctx,
+		resource.WithAttributes(
 			semconv.ServiceName(service),
 			semconv.ServiceVersion(version),
 		),
 	)
+	res, err := resource.Merge(resource.Default(), svcRes)
 	if err != nil {
-		res = resource.Default()
+		log.Printf("otel: resource merge failed: %v; service.name/version may be missing from spans", err)
+		res = svcRes
 	}
 
 	sampler := traceSampler(cfg.SampleRatio)
@@ -110,7 +111,9 @@ func initTracing(service, version string, cfg TelemetryConfig) func() {
 	return func() {
 		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		_ = tp.Shutdown(shutdownCtx)
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			log.Printf("otel: shutdown flush failed: %v", err)
+		}
 	}
 }
 

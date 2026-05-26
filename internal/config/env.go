@@ -38,15 +38,18 @@ func OtelExporterEndpoint() string {
 	return getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
 }
 
-// OtelExporterInsecure enables plaintext OTLP/gRPC. Defaults to true when APP_ENV=dev.
+// OtelExporterInsecure enables plaintext OTLP/gRPC.
+// Defaults to true only when APP_ENV is explicitly "dev", "development", or "local".
+// An unset APP_ENV defaults to secure (false) to avoid accidental plaintext export.
 func OtelExporterInsecure() bool {
-	switch getenv("OTEL_EXPORTER_OTLP_INSECURE", "") {
+	switch os.Getenv("OTEL_EXPORTER_OTLP_INSECURE") {
 	case "true", "1", "yes":
 		return true
 	case "false", "0", "no":
 		return false
 	default:
-		return AppEnv() == "dev"
+		appEnv := os.Getenv("APP_ENV")
+		return appEnv == "dev" || appEnv == "development" || appEnv == "local"
 	}
 }
 

@@ -15,6 +15,9 @@ import (
 // are public. Use gincommon.ProtectedMiddlewares on route groups in consumer services.
 func NewRouter(log port.Logger, serviceName string) *gin.Engine {
 	r := gin.New()
+	// Disable X-Forwarded-For trust so c.ClientIP() always returns the real remote address.
+	// Consumers behind a trusted proxy should call r.SetTrustedProxies with their proxy CIDRs.
+	_ = r.SetTrustedProxies(nil)
 
 	cfg := gincommon.Config{
 		Logger:       log,

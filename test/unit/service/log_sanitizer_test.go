@@ -39,3 +39,13 @@ func TestSanitize_RedactsSensitiveKeys(t *testing.T) {
 		t.Fatalf("note = %v", out["note"])
 	}
 }
+
+func TestSanitize_EmptyKeyNotSensitive(t *testing.T) {
+	out := service.Sanitize(map[string]any{"": "value", "  ": "spaced"})
+	if out[""] != "value" {
+		t.Fatalf("empty key should not be redacted, got %v", out[""])
+	}
+	if out["  "] != "spaced" {
+		t.Fatalf("whitespace-only key should not be redacted, got %v", out["  "])
+	}
+}

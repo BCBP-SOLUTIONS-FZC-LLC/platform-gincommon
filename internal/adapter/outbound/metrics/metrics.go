@@ -31,17 +31,30 @@ var (
 const defaultVersion = "unknown"
 
 // Init registers Prometheus collectors with const labels service and version.
+// It is idempotent via sync.Once: the first call wins. All reads of the package-level
+// vars are safe after Init returns because sync.Once provides the required happens-before.
 // Empty buildVersion is stored as "unknown".
 func Init(serviceName, buildVersion string) {
 	initOnce.Do(func() {
 		if buildVersion == "" {
 			buildVersion = defaultVersion
 		}
-		initMetrics(serviceName, buildVersion)
+		initMetricsWithRegisterer(serviceName, buildVersion, prometheus.DefaultRegisterer)
 	})
 }
 
-func initMetrics(serviceName, buildVersion string) {
+// InitWithRegisterer initializes metrics using the provided Prometheus registerer.
+// Unlike Init, it does not use sync.Once, allowing test packages to use isolated
+// registries (prometheus.NewRegistry()) to avoid cross-test pollution.
+// It panics on duplicate registration just like prometheus.MustRegister.
+func InitWithRegisterer(serviceName, buildVersion string, reg prometheus.Registerer) {
+	if buildVersion == "" {
+		buildVersion = defaultVersion
+	}
+	initMetricsWithRegisterer(serviceName, buildVersion, reg)
+}
+
+func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.Registerer) {
 	constLabels := prometheus.Labels{
 		"service": serviceName,
 		"version": buildVersion,
@@ -131,7 +144,7 @@ func initMetrics(serviceName, buildVersion string) {
 
 	initGRPCMetrics(constLabels)
 
-	prometheus.MustRegister(
+	reg.MustRegister(
 		BuildInfo,
 		HttpRequestsTotal,
 		HttpRequestDuration,

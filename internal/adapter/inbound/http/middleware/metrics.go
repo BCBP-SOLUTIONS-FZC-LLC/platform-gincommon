@@ -7,11 +7,13 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
 	"github.com/gin-gonic/gin"
 )
 
 // MetricsMiddleware records Prometheus HTTP metrics (duration, sizes, panics, 429).
-func MetricsMiddleware() gin.HandlerFunc {
+// Pass a non-nil logger to emit a warn-level log entry for every 429 response.
+func MetricsMiddleware(logger port.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if metrics.HttpActiveRequests == nil {
 			c.Next()
@@ -59,6 +61,13 @@ func MetricsMiddleware() gin.HandlerFunc {
 
 		if code == http.StatusTooManyRequests {
 			metrics.RecordHTTPRateLimited(method, route)
+			if logger != nil {
+				logger.Warn("rate limited", map[string]any{
+					"method": method,
+					"route":  route,
+					"status": code,
+				})
+			}
 		}
 	}
 }

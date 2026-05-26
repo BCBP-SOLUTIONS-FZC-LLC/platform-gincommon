@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -30,14 +31,15 @@ func PanicRecoveryMiddleware(logger port.Logger) gin.HandlerFunc {
 				}
 				path := c.Request.URL.Path
 
-				// Log panic
+				// Log panic; fall back to stderr when no structured logger is configured.
+				stack := debug.Stack()
 				if logger != nil {
 					fields := service.Sanitize(map[string]interface{}{
 						"error_category": "runtime",
 						"error_type":     "panic",
 						"error_source":   "middleware",
 						"panic":          fmt.Sprint(err),
-						"stack":          string(debug.Stack()),
+						"stack":          string(stack),
 						"method":         c.Request.Method,
 						"route":          route,
 						"path":           path,
@@ -47,6 +49,8 @@ func PanicRecoveryMiddleware(logger port.Logger) gin.HandlerFunc {
 						"duration":       time.Since(start),
 					})
 					logger.Error("panic recovered", fields)
+				} else {
+					log.Printf("panic recovered: %v\n%s", err, stack)
 				}
 
 				span := trace.SpanFromContext(c.Request.Context())

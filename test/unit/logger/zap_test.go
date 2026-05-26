@@ -2,6 +2,7 @@ package logger_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/logger"
@@ -45,4 +46,20 @@ func TestNewLogger_TypedFields(t *testing.T) {
 		"err":        errors.New("ignored in smoke"),
 		"tags":       []string{"a", "b"},
 	})
+}
+
+func TestZapLogger_ManyFields_TrimsPool(t *testing.T) {
+	log, err := logger.NewLogger("prod")
+	if err != nil {
+		t.Fatalf("logger: %v", err)
+	}
+
+	// More than zapFieldPoolMaxCap (64) fields forces releaseZapFields to shrink the pool slice.
+	fields := make(map[string]interface{}, 65)
+	for i := 0; i < 65; i++ {
+		fields[fmt.Sprintf("k%d", i)] = i
+	}
+	log.Info("many-fields-first", fields)
+	// Second call reuses the pool entry; if cap was reset, this exercises the shrink path again.
+	log.Info("many-fields-second", fields)
 }

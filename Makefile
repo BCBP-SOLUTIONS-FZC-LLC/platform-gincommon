@@ -60,6 +60,8 @@ help:
 	@echo " make docker-up   - start local stack"
 	@echo " make docker-down - stop local stack"
 	@echo " make ci          - full CI pipeline (tidy + vet + lint + test-ci + build)"
+	@echo " make cover       - coverage profile + open HTML report in browser"
+	@echo " make cover-func  - coverage summary by function (terminal output)"
 
 # -----------------------------
 # GO BASICS
@@ -174,14 +176,23 @@ clean:
 ci: tidy vet lint test-ci build
 
 # -----------------------------
+# COVERAGE
+# -----------------------------
+
+.PHONY: cover
+cover:
+	$(GO) test $(TEST_PKGS) -race -count=1 -timeout 120s -coverpkg=$(COVER_PKG_LIST) -coverprofile=coverage.out
+	$(GO) tool cover -html=coverage.out
+
+.PHONY: cover-func
+cover-func:
+	$(GO) test $(TEST_PKGS) -race -count=1 -timeout 120s -coverpkg=$(COVER_PKG_LIST) -coverprofile=coverage.out
+	$(GO) tool cover -func=coverage.out
+
+# -----------------------------
 # DEBUG HELPERS
 # -----------------------------
 
 .PHONY: race
 race:
 	$(GO) test $(TEST_PKGS) -race -count=1 -timeout 120s
-
-.PHONY: cover
-cover:
-	$(GO) test $(TEST_PKGS) -race -count=1 -timeout 120s -coverpkg=$(COVER_PKG_LIST) -coverprofile=coverage.out
-	$(GO) tool cover -html=coverage.out
