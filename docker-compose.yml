@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "${OTEL_COLLECTOR_GRPC_PORT:-4317}:4317"
+      - "${OTEL_COLLECTOR_HTTP_PORT:-4318}:4318"
+    depends_on:
+      - tempo
+
+  tempo:
+    image: grafana/tempo:latest
+    # OTLP ingest is internal; host apps export to otel-collector instead.
+    expose:
+      - "4317"
+      - "4318"
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "${LOKI_HTTP_PORT:-3100}:3100"
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./logs:/var/log
+    depends_on:
+      - loki
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "${PROMETHEUS_HTTP_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "${GRAFANA_HTTP_PORT:-3000}:3000"

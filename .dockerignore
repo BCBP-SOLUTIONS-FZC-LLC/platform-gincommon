@@ -1,0 +1,20 @@
+.git
+.github
+.claude
+.cursor
+.env
+.env.*
+!.env-example
+bin
+logs
+*.log
+coverage.*
+*.out
+# test code is not needed to compile the binary
+test/
+# docs and tooling config not needed at build time
+*.md
+Makefile
+.golangci.yml
+docker-compose.yml
+docker/prometheus/prometheus.yml
