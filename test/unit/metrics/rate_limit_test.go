@@ -25,3 +25,10 @@ func TestInit_RegistersRateLimitedCounter(t *testing.T) {
 		t.Fatal("expected rate limit counters to be initialized")
 	}
 }
+
+func TestRecordHTTPRateLimited_NilSafe(t *testing.T) {
+	saved := metrics.RateLimitedRequestsTotal
+	metrics.RateLimitedRequestsTotal = nil
+	defer func() { metrics.RateLimitedRequestsTotal = saved }()
+	metrics.RecordHTTPRateLimited("GET", "/limited") // must not panic when counter is nil
+}
