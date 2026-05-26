@@ -1,0 +1,24 @@
+# https://golangci-lint.run/docs/configuration/
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: package-comments
+        - name: exported
+        - name: var-naming
+          disabled: true # allow Http*, Grpc* metric names matching Prometheus
+
+issues:
+  exclude-rules:
+    # Test functions and test-only packages are not public API.
+    - path: '_test\.go'
+      linters:
+        - revive
