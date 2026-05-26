@@ -17,6 +17,9 @@ permissions:
   contents: write   # create GitHub Release
   packages: write   # push to GHCR
 
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 jobs:
   validate:
     name: Validate
@@ -24,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -82,9 +87,9 @@ jobs:
           images: ghcr.io/bcbp-solutions-fzc-llc/platform-gincommon
           # Produces: vMAJOR.MINOR.PATCH, vMAJOR.MINOR, vMAJOR, and latest (on non-pre-releases)
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -96,7 +101,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: BUILD_VERSION=${{ github.ref_name }}
+          build-args: BUILD_VERSION=${{ env.RELEASE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -110,7 +115,7 @@ jobs:
 
       - name: Extract release notes from CHANGELOG
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md \
             | sed -e 's/^[[:space:]]*$//' \
             > release-notes.md
@@ -124,10 +129,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PRERELEASE_FLAG=""
-          if echo "$GITHUB_REF_NAME" | grep -q -- '-'; then
+          if echo "$RELEASE_TAG" | grep -q -- '-'; then
             PRERELEASE_FLAG="--prerelease"
           fi
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
+            --title "$RELEASE_TAG" \
             --notes-file release-notes.md \
             $PRERELEASE_FLAG
