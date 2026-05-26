@@ -17,9 +17,9 @@ import (
 
 // testServerStream is a minimal grpc.ServerStream for unit tests.
 type testServerStream struct {
-	ctx      context.Context
-	recvErr  error
-	sendErr  error
+	ctx     context.Context
+	recvErr error
+	sendErr error
 }
 
 func (s *testServerStream) SetHeader(metadata.MD) error  { return nil }
