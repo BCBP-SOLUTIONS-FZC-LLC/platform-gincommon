@@ -69,7 +69,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/bcbp-solutions-fzc-llc/platform-gincommon
           # Produces: vMAJOR.MINOR.PATCH, vMAJOR.MINOR, vMAJOR, latest (non-pre-releases)
