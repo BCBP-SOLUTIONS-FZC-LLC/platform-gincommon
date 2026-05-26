@@ -1,7 +1,7 @@
 # CI for https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon
 name: CI
 
-on:
+"on":
   push:
     branches: [main, master]
   pull_request:
