@@ -1,0 +1,70 @@
+# Reusable validation workflow — called by ci.yml and release.yml.
+# Runs: checkout → Go setup → mod verify → fmt → tidy drift → vet → lint → vulncheck → test
+name: Validate
+
+"on":
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to check out (leave empty to use the caller ref)'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Format check
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "gofmt violations:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Tidy check
+        run: |
+          make tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Vet
+        run: make vet
+
+      - name: Lint
+        run: make lint
+
+      - name: Vulnerability check
+        # Scope to library packages only — cmd/server is a demo binary and its
+        # stdlib call graph (net/tls, html/template) produces noise, not library risk.
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./internal/... ./pkg/...
+
+      - name: Test (race detector)
+        run: make test-ci
