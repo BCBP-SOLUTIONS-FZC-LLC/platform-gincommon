@@ -1,0 +1,20 @@
+flowchart TD
+    A([Middleware stack constructor called]) --> B{Which constructor?}
+
+    B -- ObservabilityMiddlewares --> C[panic: if ServiceName empty]
+    C --> D[metrics.Init — idempotent]
+    D --> E[resolve BuildVersion from env if empty]
+    E --> F[resolveTelemetry — merge cfg.Tracing over env defaults]
+    F --> G[EnsureInitTelemetry — installs SDK if no provider yet]
+    G --> H["return [\n  PanicRecoveryMiddleware\n  RequestIDMiddleware\n  TracingMiddleware\n  CorrelationHeadersMiddleware\n  MetricsMiddleware\n  LoggingMiddleware\n]"]
+
+    B -- ProtectedMiddlewares --> I[NewContextService]
+    I --> J["return [\n  RequireAuth\n  ContextMiddleware\n]"]
+
+    B -- DefaultMiddlewares --> K[calls ObservabilityMiddlewares]
+    K --> L[calls ProtectedMiddlewares]
+    L --> M["return [\n  PanicRecoveryMiddleware\n  RequestIDMiddleware\n  TracingMiddleware\n  CorrelationHeadersMiddleware\n  MetricsMiddleware\n  LoggingMiddleware\n  RequireAuth\n  ContextMiddleware\n]"]
+
+    style H text-align:left
+    style J text-align:left
+    style M text-align:left

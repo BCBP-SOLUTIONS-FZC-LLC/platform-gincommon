@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestRequestBodySize(t *testing.T) {
@@ -45,5 +46,14 @@ func TestProtoMessageSize_NonProtoValue_ReturnsZero(t *testing.T) {
 	}
 	if got := metrics.ProtoMessageSize(42); got != 0 {
 		t.Fatalf("ProtoMessageSize(int) = %v, want 0", got)
+	}
+}
+
+// TestProtoMessageSize_TypedNilProto ensures the typed-nil guard works.
+// A (*emptypb.Empty)(nil) bypasses the plain v == nil check; the reflect guard catches it.
+func TestProtoMessageSize_TypedNilProto(t *testing.T) {
+	var m *emptypb.Empty // typed nil — implements proto.Message but points to nil
+	if got := metrics.ProtoMessageSize(m); got != 0 {
+		t.Fatalf("ProtoMessageSize(typed-nil proto) = %v, want 0", got)
 	}
 }

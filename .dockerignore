@@ -18,3 +18,4 @@ Makefile
 .golangci.yml
 docker-compose.yml
 docker/prometheus/prometheus.yml
+docs/

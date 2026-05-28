@@ -16,6 +16,8 @@ var (
 	GrpcInflight *prometheus.GaugeVec
 	// GrpcRateLimitedRequestsTotal counts ResourceExhausted RPCs by method.
 	GrpcRateLimitedRequestsTotal *prometheus.CounterVec
+	// GrpcPanicTotal counts panics recovered by gRPC interceptors by method.
+	GrpcPanicTotal *prometheus.CounterVec
 )
 
 func initGRPCMetrics(constLabels prometheus.Labels) {
@@ -83,6 +85,23 @@ func initGRPCMetrics(constLabels prometheus.Labels) {
 		},
 		[]string{"method"},
 	)
+
+	GrpcPanicTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name:        "grpc_panic_total",
+			Help:        "Total gRPC handler panics recovered by interceptors",
+			ConstLabels: constLabels,
+		},
+		[]string{"method"},
+	)
+}
+
+// RecordGRPCPanic increments grpc_panic_total for the given method.
+func RecordGRPCPanic(method string) {
+	if GrpcPanicTotal == nil {
+		return
+	}
+	GrpcPanicTotal.WithLabelValues(method).Inc()
 }
 
 // RecordGRPCRateLimited increments grpc_rate_limited_requests_total.

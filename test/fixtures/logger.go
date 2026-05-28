@@ -38,7 +38,3 @@ func (m *MockLogger) Error(msg string, fields map[string]interface{}) {
 	m.record("error", msg, fields)
 }
 
-// Fatal records a fatal-level log call.
-func (m *MockLogger) Fatal(msg string, fields map[string]interface{}) {
-	m.record("fatal", msg, fields)
-}

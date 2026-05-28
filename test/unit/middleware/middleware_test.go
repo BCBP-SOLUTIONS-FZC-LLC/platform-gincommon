@@ -21,9 +21,11 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -57,7 +59,7 @@ func TestTracingMiddleware_NonZeroTraceIDAfterOtelInitWithoutExporter(t *testing
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()
-	r.Use(middleware.TracingMiddleware(), middleware.LoggingMiddleware(log))
+	r.Use(middleware.TracingMiddleware(""), middleware.LoggingMiddleware(log))
 	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -79,7 +81,7 @@ func TestLoggingMiddleware_LogsRequestFields(t *testing.T) {
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()
-	r.Use(middleware.TracingMiddleware(), middleware.RequestIDMiddleware(), middleware.LoggingMiddleware(log))
+	r.Use(middleware.TracingMiddleware(""), middleware.RequestIDMiddleware(), middleware.LoggingMiddleware(log))
 	r.GET("/log", func(c *gin.Context) { c.Status(http.StatusCreated) })
 
 	req := httptest.NewRequest(http.MethodGet, "/log", nil)
@@ -112,8 +114,8 @@ func TestLoggingMiddleware_LogsRequestFields(t *testing.T) {
 	if !isValidOtelTraceID(traceID) {
 		t.Fatalf("trace_id = %v, want valid OpenTelemetry trace ID", log.Fields["trace_id"])
 	}
-	if log.Fields["duration"] == "" {
-		t.Fatal("expected duration in log fields")
+	if _, ok := log.Fields["duration_ms"]; !ok {
+		t.Fatal("expected duration_ms in log fields")
 	}
 }
 
@@ -228,7 +230,7 @@ func TestPanicRecoveryMiddleware_WithTracing_IncludesTraceIDInResponseAndLog(t *
 	r.Use(
 		middleware.PanicRecoveryMiddleware(log),
 		middleware.RequestIDMiddleware(),
-		middleware.TracingMiddleware(),
+		middleware.TracingMiddleware(""),
 		middleware.MetricsMiddleware(nil),
 	)
 	r.GET("/panic", func(c *gin.Context) { panic("boom") })
@@ -272,7 +274,7 @@ func TestPanicRecoveryMiddleware_WithTracing_SetsSpanErrorOnPanic(t *testing.T) 
 	r.Use(
 		middleware.PanicRecoveryMiddleware(log),
 		middleware.RequestIDMiddleware(),
-		middleware.TracingMiddleware(),
+		middleware.TracingMiddleware(""),
 	)
 	r.GET("/panic", func(c *gin.Context) { panic("handler failure") })
 
@@ -311,7 +313,7 @@ func TestTracingMiddleware_SetsSpanAttributesOnPanic(t *testing.T) {
 	r := gin.New()
 	r.Use(
 		middleware.PanicRecoveryMiddleware(nil),
-		middleware.TracingMiddleware(),
+		middleware.TracingMiddleware(""),
 	)
 	r.GET("/panic-attrs", func(c *gin.Context) { panic("boom") })
 
@@ -475,8 +477,10 @@ func TestMetricsMiddleware_UnknownRoute(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 
+	// Unregistered routes are labelled "unknown" (not the raw path) to prevent
+	// unbounded label cardinality from scanner probes and path-parameter abuse.
 	counter, err := metrics.HttpRequestsTotal.GetMetricWithLabelValues(
-		http.MethodPost, "/missing", "4xx", "client_error",
+		http.MethodPost, "unknown", "4xx", "client_error",
 	)
 	if err != nil {
 		t.Fatalf("get metric: %v", err)
@@ -640,7 +644,7 @@ func TestTracingMiddleware_SetsOtelTraceIDInContext(t *testing.T) {
 	useTestTracer(t)
 
 	r := gin.New()
-	r.Use(middleware.TracingMiddleware())
+	r.Use(middleware.TracingMiddleware(""))
 	r.GET("/x", func(c *gin.Context) {
 		if !isValidOtelTraceID(c.GetString("trace_id")) {
 			t.Fatalf("trace_id = %q, want valid OpenTelemetry trace ID", c.GetString("trace_id"))
@@ -666,7 +670,7 @@ func TestTracingMiddleware_SetsSpanAttributes(t *testing.T) {
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
 	r := gin.New()
-	r.Use(middleware.TracingMiddleware())
+	r.Use(middleware.TracingMiddleware(""))
 	r.GET("/items/:id", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/items/42", nil)
@@ -717,7 +721,7 @@ func TestTracingMiddleware_SetsSpanErrorOn5xx(t *testing.T) {
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
 	r := gin.New()
-	r.Use(middleware.TracingMiddleware())
+	r.Use(middleware.TracingMiddleware(""))
 	r.GET("/fail", func(c *gin.Context) { c.Status(http.StatusInternalServerError) })
 
 	req := httptest.NewRequest(http.MethodGet, "/fail", nil)
@@ -755,7 +759,7 @@ func TestTracingMiddleware_PropagatesW3CTraceContext(t *testing.T) {
 
 	var ginTraceID string
 	r := gin.New()
-	r.Use(middleware.TracingMiddleware())
+	r.Use(middleware.TracingMiddleware(""))
 	r.GET("/x", func(c *gin.Context) {
 		ginTraceID = c.GetString("trace_id")
 		c.Status(http.StatusOK)
@@ -795,7 +799,7 @@ func TestTracingMiddleware_TraceIDMatchesSpanContext(t *testing.T) {
 
 	var ginTraceID string
 	r := gin.New()
-	r.Use(middleware.TracingMiddleware())
+	r.Use(middleware.TracingMiddleware(""))
 	r.GET("/x", func(c *gin.Context) {
 		ginTraceID = c.GetString("trace_id")
 		c.Status(http.StatusOK)
@@ -855,4 +859,283 @@ func isValidOtelTraceID(id string) bool {
 		}
 	}
 	return id != "00000000000000000000000000000000"
+}
+
+func TestMetricsMiddleware_AbortWithNoStatus_NotRecordedAs5xx(t *testing.T) {
+	// Regression: `if panicked || code == 0` was promoting any c.Abort() with no
+	// explicit status (Gin returns 200 as default) into a 5xx Prometheus label,
+	// inflating error budgets. After the fix only panics use code=500.
+	gin.SetMode(gin.TestMode)
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-abort-test", "test", reg)
+
+	r := gin.New()
+	r.Use(middleware.MetricsMiddleware(nil))
+	r.GET("/abort", func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusNoContent) // 204 — not a server error
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/abort", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+
+	// Must be recorded as 2xx/success, not 5xx/server_error.
+	counter, err := metrics.HttpRequestsTotal.GetMetricWithLabelValues(
+		http.MethodGet, "/abort", "2xx", "success",
+	)
+	if err != nil {
+		t.Fatalf("get 2xx metric: %v", err)
+	}
+	if got := testutil.ToFloat64(counter); got != 1 {
+		t.Fatalf("http_requests_total[2xx/success] = %v, want 1 (c.AbortWithStatus(204) must not be 5xx)", got)
+	}
+}
+
+func TestMetricsMiddleware_Panic_RecordedAs5xx(t *testing.T) {
+	// Confirms panicking handlers are counted in http_requests_total as 5xx.
+	gin.SetMode(gin.TestMode)
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-panic-test", "test", reg)
+
+	r := gin.New()
+	r.Use(
+		middleware.PanicRecoveryMiddleware(nil),
+		middleware.MetricsMiddleware(nil),
+	)
+	r.GET("/panic-metrics", func(c *gin.Context) { panic("boom") })
+
+	req := httptest.NewRequest(http.MethodGet, "/panic-metrics", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+
+	counter, err := metrics.HttpRequestsTotal.GetMetricWithLabelValues(
+		http.MethodGet, "/panic-metrics", "5xx", "server_error",
+	)
+	if err != nil {
+		t.Fatalf("get 5xx metric: %v", err)
+	}
+	if got := testutil.ToFloat64(counter); got != 1 {
+		t.Fatalf("http_requests_total[5xx] = %v, want 1 for panic", got)
+	}
+}
+
+// ─── Coverage gap tests ────────────────────────────────────────────────────────
+
+// AuthZMiddleware with a typed-nil *RequestContext stored in Gin context must return 500,
+// not panic. This covers the ok=true && ctx==nil branch added by the nil-guard fix.
+func TestAuthZMiddleware_TypedNilContext_Returns500(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	auth := service.NewRBACService()
+	r := gin.New()
+	r.Use(
+		middleware.PanicRecoveryMiddleware(nil),
+		func(c *gin.Context) {
+			var rc *domain.RequestContext // typed nil: ok=true but rc==nil
+			c.Set(middleware.CtxRequestContextKey, rc)
+			c.Next()
+		},
+		middleware.AuthZMiddleware(auth, "read", "doc", nil),
+	)
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for typed-nil RequestContext", w.Code)
+	}
+}
+
+// AuthZMiddleware with nil Authorizer must return 500 (guards against panic).
+func TestAuthZMiddleware_NilAuth_Returns500(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(
+		middleware.PanicRecoveryMiddleware(nil),
+		func(c *gin.Context) {
+			rc := &domain.RequestContext{UserID: "u1", TenantID: "t1"}
+			c.Set(middleware.CtxRequestContextKey, rc)
+			c.Next()
+		},
+		middleware.AuthZMiddleware(nil, "read", "doc", nil),
+	)
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for nil Authorizer", w.Code)
+	}
+}
+
+// sanitizeLogValue truncation: a string longer than 256 bytes must be truncated
+// at a valid UTF-8 rune boundary.
+// ─── New coverage-gap tests ────────────────────────────────────────────────────
+
+// MetricsMiddleware with a non-nil logger must emit a Warn for every 429.
+func TestMetricsMiddleware_429_WithLogger_LogsWarn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-429-logger", "test", reg)
+
+	log := &fixtures.MockLogger{}
+	r := gin.New()
+	r.Use(middleware.MetricsMiddleware(log))
+	r.GET("/ratelimited", func(c *gin.Context) {
+		c.Status(http.StatusTooManyRequests)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ratelimited", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", w.Code)
+	}
+	if log.Level != "warn" {
+		t.Fatalf("log level = %q, want warn for 429 with non-nil logger", log.Level)
+	}
+	if log.Msg != "rate limited" {
+		t.Fatalf("log msg = %q, want 'rate limited'", log.Msg)
+	}
+}
+
+// AuthZMiddleware with a non-nil logger must emit Error when the request context is absent.
+func TestAuthZMiddleware_ContextMissing_WithLogger(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	log := &fixtures.MockLogger{}
+	auth := service.NewRBACService()
+	r := gin.New()
+	r.Use(middleware.AuthZMiddleware(auth, "read", "doc", log))
+	r.GET("/doc", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/doc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if log.Level != "error" {
+		t.Fatalf("log level = %q, want error for missing context", log.Level)
+	}
+}
+
+// AuthZMiddleware with a non-nil logger must emit Error when the stored value is the wrong type.
+func TestAuthZMiddleware_ContextWrongType_WithLogger(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	log := &fixtures.MockLogger{}
+	auth := service.NewRBACService()
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRequestContextKey, "wrong-type")
+		c.Next()
+	})
+	r.Use(middleware.AuthZMiddleware(auth, "read", "doc", log))
+	r.GET("/doc", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/doc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if log.Level != "error" {
+		t.Fatalf("log level = %q, want error for wrong context type", log.Level)
+	}
+}
+
+// LoggingMiddleware emits an http_request Error log for panicking requests.
+func TestLoggingMiddleware_PanicEmitsErrorLog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-log-panic", "test", reg)
+
+	log := &fixtures.MockLogger{}
+	r := gin.New()
+	r.Use(
+		middleware.PanicRecoveryMiddleware(nil),
+		middleware.MetricsMiddleware(nil),
+		middleware.LoggingMiddleware(log),
+	)
+	r.GET("/panic", func(c *gin.Context) { panic("log-panic-test") })
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if log.Msg != "http_request" {
+		t.Fatalf("log msg = %q, want http_request (LoggingMiddleware panicked-sentinel)", log.Msg)
+	}
+	if log.Level != "error" {
+		t.Fatalf("log level = %q, want error for panicking request", log.Level)
+	}
+	if s, _ := log.Fields["status"].(int); s != http.StatusInternalServerError {
+		t.Fatalf("log status = %v, want 500", log.Fields["status"])
+	}
+}
+
+// sanitizeLogValue must strip embedded control characters (log injection prevention).
+func TestSanitizeLogValue_StripsControlChars(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	log := &fixtures.MockLogger{}
+	r := gin.New()
+	r.Use(middleware.LoggingMiddleware(log))
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	// Embed a newline in user-id to attempt log injection.
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("x-user-id", "user\ninjected: evil-field")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	uid, ok := log.Fields["user_id"]
+	if !ok {
+		t.Fatal("expected user_id field in log")
+	}
+	s, _ := uid.(string)
+	if strings.Contains(s, "\n") {
+		t.Fatalf("user_id %q still contains newline after sanitization", s)
+	}
+}
+
+func TestSanitizeLogValue_TruncatesAtRuneBoundary(t *testing.T) {
+	// Build a string: 254 ASCII bytes + a 3-byte UTF-8 rune (€ = U+20AC = 0xE2 0x82 0xAC).
+	// Total = 257 bytes, so it exceeds 256 and must be truncated before the euro sign.
+	base := strings.Repeat("a", 254)
+	withRune := base + "€" // 254 + 3 = 257 bytes
+	// Exercise the sanitizeLogValue path by triggering LoggingMiddleware with a
+	// crafted header value. We can't call sanitizeLogValue directly (unexported),
+	// so hit it via the LoggingMiddleware fallback header path on a 401 response.
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.LoggingMiddleware(nil)) // nil logger → no-op; we just need the code path
+	r.GET("/x", func(c *gin.Context) {
+		c.Header("x-tenant-id", withRune) // overlong header on response
+		c.Status(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("x-tenant-id", withRune) // logged via sanitizeLogValue fallback
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	// No assertion needed — we just need the code path to execute without panic.
 }

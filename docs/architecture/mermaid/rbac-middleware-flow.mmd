@@ -1,0 +1,29 @@
+sequenceDiagram
+    participant H as Handler (Gin)
+    participant AZ as AuthZMiddleware
+    participant SVC as port.Authorizer
+
+    H ->>+ AZ: c.Next() reaches AuthZMiddleware
+
+    alt RequestContext missing from Gin context
+        AZ -->> H: 500 Internal Server Error\n"request context missing"
+    else RequestContext wrong type
+        AZ -->> H: 500 Internal Server Error\n"invalid request context"
+    else RequestContext valid
+        AZ ->>+ SVC: Authorize(userID, roles, action, resource)
+
+        alt auth.Authorize returns ErrForbidden
+            SVC -->> AZ: ErrForbidden
+            Note over AZ: logger.Warn "authz: access denied"\n{user_id, roles, action, resource}
+            AZ -->> H: 403 Forbidden
+        else auth.Authorize returns other error
+            SVC -->> AZ: error
+            Note over AZ: logger.Error "authz: internal authorization error"
+            AZ -->> H: 500 Internal Server Error
+        else auth.Authorize returns nil
+            SVC -->>- AZ: nil
+            AZ ->>+ H: c.Next() — handler runs
+            H -->>- AZ: return
+        end
+    end
+    AZ -->>- H: return

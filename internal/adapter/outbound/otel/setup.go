@@ -56,11 +56,20 @@ func EnsureInit(service, version, endpoint string) {
 }
 
 // EnsureInitTelemetry is like EnsureInit with full telemetry settings.
+// The check-and-init is performed under shutdownMu to prevent a TOCTOU race
+// where two goroutines both see a noop provider and both install a new SDK provider,
+// with the second clobbering the first and losing its buffered spans.
 func EnsureInitTelemetry(service, version string, cfg TelemetryConfig) {
+	shutdownMu.Lock()
+	defer shutdownMu.Unlock()
 	if _, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider); ok {
 		return
 	}
-	InitTelemetry(service, version, cfg)
+	if activeShutdown != nil {
+		activeShutdown()
+		activeShutdown = nil
+	}
+	activeShutdown = initTracing(service, version, cfg)
 }
 
 func initTracing(service, version string, cfg TelemetryConfig) func() {

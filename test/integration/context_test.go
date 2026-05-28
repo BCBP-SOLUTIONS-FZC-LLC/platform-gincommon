@@ -17,7 +17,7 @@ func TestContextMiddleware_MissingTenantUnauthorized(t *testing.T) {
 
 	r := gin.New()
 	r.Use(
-		middleware.TracingMiddleware(),
+		middleware.TracingMiddleware(""),
 		middleware.ContextMiddleware(service.NewContextService()),
 	)
 	r.GET("/ctx", func(c *gin.Context) { c.Status(http.StatusOK) })
@@ -38,7 +38,7 @@ func TestContextMiddleware_ParseRoles(t *testing.T) {
 
 	r := gin.New()
 	r.Use(
-		middleware.TracingMiddleware(),
+		middleware.TracingMiddleware(""),
 		middleware.ContextMiddleware(service.NewContextService()),
 	)
 	r.GET("/ctx", func(c *gin.Context) {

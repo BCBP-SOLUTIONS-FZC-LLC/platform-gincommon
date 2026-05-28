@@ -14,7 +14,10 @@ func NormalizeHeaderValue(raw string) (string, bool) {
 		return "", false
 	}
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
+		// Reject ASCII controls, DEL, and Unicode line separators (U+2028/U+2029).
+		// Some log parsers treat U+2028/U+2029 as newlines, enabling log injection
+		// even though they are valid UTF-8 above 0x7F.
+		if r < 0x20 || r == 0x7f || r == 0x2028 || r == 0x2029 {
 			return "", false
 		}
 	}

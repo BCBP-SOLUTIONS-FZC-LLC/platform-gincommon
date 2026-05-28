@@ -12,7 +12,8 @@ func TestInit_RegistersGRPCMetrics(t *testing.T) {
 		metrics.GrpcRequestSizeBytes == nil ||
 		metrics.GrpcResponseSizeBytes == nil ||
 		metrics.GrpcInflight == nil ||
-		metrics.GrpcRateLimitedRequestsTotal == nil {
+		metrics.GrpcRateLimitedRequestsTotal == nil ||
+		metrics.GrpcPanicTotal == nil {
 		t.Fatal("expected gRPC metric vectors to be initialized")
 	}
 
@@ -24,6 +25,13 @@ func TestRecordGRPCRateLimited_NilSafe(t *testing.T) {
 	metrics.GrpcRateLimitedRequestsTotal = nil
 	defer func() { metrics.GrpcRateLimitedRequestsTotal = saved }()
 	metrics.RecordGRPCRateLimited("/test.Service/Method") // must not panic when nil
+}
+
+func TestRecordGRPCPanic_NilSafe(t *testing.T) {
+	saved := metrics.GrpcPanicTotal
+	metrics.GrpcPanicTotal = nil
+	defer func() { metrics.GrpcPanicTotal = saved }()
+	metrics.RecordGRPCPanic("/test.Service/Method") // must not panic when nil
 }
 
 func TestRecordGRPC_NilSafe(t *testing.T) {

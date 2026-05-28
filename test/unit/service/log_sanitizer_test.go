@@ -1,7 +1,9 @@
 package service_test
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 )
@@ -38,6 +40,93 @@ func TestSanitize_RedactsSensitiveKeys(t *testing.T) {
 	if out["note"] != "ok" {
 		t.Fatalf("note = %v", out["note"])
 	}
+}
+
+func TestSanitize_RedactsJWT(t *testing.T) {
+	out := service.Sanitize(map[string]any{"jwt": "eyJhbGc...", "jwt_token": "x"})
+	if out["jwt"] != "[REDACTED]" {
+		t.Fatalf("jwt = %v, want [REDACTED]", out["jwt"])
+	}
+	if out["jwt_token"] != "[REDACTED]" {
+		t.Fatalf("jwt_token = %v, want [REDACTED]", out["jwt_token"])
+	}
+}
+
+func TestSanitize_RedactsSession(t *testing.T) {
+	out := service.Sanitize(map[string]any{"session": "abc", "session_id": "xyz"})
+	if out["session"] != "[REDACTED]" {
+		t.Fatalf("session = %v, want [REDACTED]", out["session"])
+	}
+	if out["session_id"] != "[REDACTED]" {
+		t.Fatalf("session_id = %v, want [REDACTED]", out["session_id"])
+	}
+}
+
+func TestSanitize_RedactsBearer(t *testing.T) {
+	out := service.Sanitize(map[string]any{"bearer": "token123", "bearer_token": "x"})
+	if out["bearer"] != "[REDACTED]" {
+		t.Fatalf("bearer = %v, want [REDACTED]", out["bearer"])
+	}
+	if out["bearer_token"] != "[REDACTED]" {
+		t.Fatalf("bearer_token = %v, want [REDACTED]", out["bearer_token"])
+	}
+}
+
+func TestSanitizeString_StripsControlChars(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		check func(string) bool
+	}{
+		{"newline", "user\ninjected: evil", func(s string) bool { return !containsRune(s, '\n') }},
+		{"carriage-return", "val\rinjected", func(s string) bool { return !containsRune(s, '\r') }},
+		{"null-byte", "val\x00null", func(s string) bool { return !containsRune(s, '\x00') }},
+		{"clean", "clean-value", func(s string) bool { return s == "clean-value" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := service.SanitizeString(c.input)
+			if !c.check(got) {
+				t.Fatalf("SanitizeString(%q) = %q — control char not stripped", c.input, got)
+			}
+		})
+	}
+}
+
+func TestSanitizeString_TruncatesAt256Bytes(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	got := service.SanitizeString(long)
+	if len(got) > 256 {
+		t.Fatalf("SanitizeString len = %d, want ≤ 256", len(got))
+	}
+}
+
+// TestSanitizeString_TruncatesAtRuneBoundary ensures the UTF-8 boundary walk runs.
+// Input: 255 ASCII bytes + "€" (U+20AC, 3 bytes) = 258 bytes total.
+// After truncation the result must be ≤ 256 bytes AND valid UTF-8 (the euro sign is dropped).
+func TestSanitizeString_TruncatesAtRuneBoundary(t *testing.T) {
+	s := strings.Repeat("a", 255) + "€" // 255 + 3 = 258 bytes
+	got := service.SanitizeString(s)
+	if len(got) > 256 {
+		t.Fatalf("SanitizeString len = %d, want ≤ 256", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("SanitizeString(%q) = %q, want valid UTF-8", s, got)
+	}
+	// The euro sign must have been dropped — it starts at byte 255 which is within the limit
+	// but its full 3-byte encoding crosses the 256-byte boundary.
+	if strings.Contains(got, "€") {
+		t.Fatal("truncated result must not contain the multi-byte rune that crossed the boundary")
+	}
+}
+
+func containsRune(s string, r rune) bool {
+	for _, c := range s {
+		if c == r {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSanitize_EmptyKeyNotSensitive(t *testing.T) {

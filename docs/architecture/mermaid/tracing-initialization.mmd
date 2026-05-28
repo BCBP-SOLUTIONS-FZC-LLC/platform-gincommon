@@ -1,0 +1,30 @@
+flowchart TD
+    A([Tracing initializer called]) --> B{Which function?}
+
+    B -- InitTracingFromEnv --> C[read OTEL_SERVICE_NAME\nBUILD_VERSION\nOTEL_EXPORTER_OTLP_ENDPOINT]
+    C --> D[call InitTracing]
+
+    B -- InitTracing --> E[build TelemetryConfig\nfrom env defaults]
+    E --> F[call InitTelemetry]
+
+    B -- EnsureTracing --> G{Is global provider\nan SDK TracerProvider?}
+    G -- yes, already initialised --> Z([no-op — return])
+    G -- no --> F
+
+    B -- EnsureInitTelemetry\nvia ObservabilityMiddlewares --> G
+
+    F --> H[shutdownMu.Lock\ncall previous shutdown if set]
+    H --> I[initTracing:\nbuild OTel Resource\nservice.name + service.version]
+    I --> J{Endpoint non-empty?}
+    J -- yes --> K[dial OTLP/gRPC exporter\nwith optional InsecureOption]
+    K -- success --> L[TracerProvider\nwith Batcher + Resource + Sampler]
+    K -- failure --> M[TracerProvider\nin-process only\nno OTLP export]
+    J -- no --> M
+    L --> N[SetTracerProvider global]
+    M --> N
+    N --> O{EnableBaggage?}
+    O -- yes --> P[propagators: TraceContext + Baggage]
+    O -- no  --> Q[propagator: TraceContext only]
+    P --> R[SetTextMapPropagator composite]
+    Q --> R
+    R --> S([return shutdown func\n5-second flush on tp.Shutdown])

@@ -14,11 +14,11 @@ import (
 
 type mockCtxBuilder struct{ err error }
 
-func (m *mockCtxBuilder) BuildContext(tenantID, userID string, roles []string, traceID string) (*domain.RequestContext, error) {
+func (m *mockCtxBuilder) BuildContext(tenantID, userID string, roles []string, traceID string, clientIP string) (*domain.RequestContext, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &domain.RequestContext{TenantID: tenantID, UserID: userID, Roles: roles, TraceID: traceID}, nil
+	return &domain.RequestContext{TenantID: tenantID, UserID: userID, Roles: roles, TraceID: traceID, ClientIP: clientIP}, nil
 }
 
 func ctxMiddlewareRouter(b *mockCtxBuilder) *gin.Engine {
@@ -36,21 +36,21 @@ func authedRequest() *http.Request {
 	return req
 }
 
-func TestContextMiddleware_ErrMissingTenant_Returns400(t *testing.T) {
+func TestContextMiddleware_ErrMissingTenant_Returns401(t *testing.T) {
 	w := httptest.NewRecorder()
 	ctxMiddlewareRouter(&mockCtxBuilder{err: domain.ErrMissingTenant}).ServeHTTP(w, authedRequest())
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
 	}
 }
 
-func TestContextMiddleware_ErrMissingUser_Returns400(t *testing.T) {
+func TestContextMiddleware_ErrMissingUser_Returns401(t *testing.T) {
 	w := httptest.NewRecorder()
 	ctxMiddlewareRouter(&mockCtxBuilder{err: domain.ErrMissingUser}).ServeHTTP(w, authedRequest())
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
 	}
 }
 

@@ -21,7 +21,7 @@ func Setup() (*gin.Engine, func(), error) {
 
 	shutdownTracing := gincommon.InitTracingFromEnv()
 
-	log, err := logger.NewLogger(config.AppEnv())
+	zapLog, err := logger.NewLogger(config.AppEnv())
 	if err != nil {
 		shutdownTracing()
 		return nil, nil, err
@@ -29,13 +29,18 @@ func Setup() (*gin.Engine, func(), error) {
 
 	SetGinMode(config.AppEnv())
 
-	router := NewRouter(log, config.OtelServiceName())
-	return router, shutdownTracing, nil
+	shutdown := func() {
+		shutdownTracing()
+		_ = zapLog.Sync() // flush buffered log entries before process exit
+	}
+
+	router := NewRouter(zapLog, config.OtelServiceName())
+	return router, shutdown, nil
 }
 
-// SetGinMode sets Gin to release mode for non-dev environments.
+// SetGinMode sets Gin to release mode for non-dev/development/local environments.
 func SetGinMode(appEnv string) {
-	if appEnv != "dev" {
+	if !config.IsDevEnv(appEnv) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 }

@@ -70,3 +70,44 @@ func constLabelsMap(m *dto.Metric) map[string]string {
 	}
 	return out
 }
+
+func TestInitWithRegisterer_RegistersCollectors(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-registerer", "v2.0", reg)
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	if len(mfs) == 0 {
+		t.Fatal("expected metrics registered on custom registerer")
+	}
+}
+
+func TestInitWithRegisterer_EmptyBuildVersion_UsesUnknown(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-empty-ver", "", reg)
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	if len(mfs) == 0 {
+		t.Fatal("expected metrics registered")
+	}
+}
+
+// ─── Coverage gap tests ────────────────────────────────────────────────────────
+
+// ProtoMessageSize: typed-nil proto.Message must return 0, not panic.
+func TestProtoMessageSize_TypedNilReturnsZero(t *testing.T) {
+	// A typed nil satisfies the proto.Message interface but the concrete pointer is nil.
+	// Without the reflect guard in ProtoMessageSize, proto.Size would panic.
+	var m *struct{ _ int } // not a proto.Message, returns 0 via !ok branch
+	if got := metrics.ProtoMessageSize(m); got != 0 {
+		t.Fatalf("non-proto nil = %v, want 0", got)
+	}
+	if got := metrics.ProtoMessageSize(nil); got != 0 {
+		t.Fatalf("nil = %v, want 0", got)
+	}
+}

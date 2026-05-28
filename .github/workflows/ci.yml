@@ -37,9 +37,10 @@ jobs:
 
       - name: Coverage (≥95% required)
         run: |
-          go test $(go list ./test/... | grep -v /test/smoke$) \
+          INTERNAL_PKG="github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/grpc/middleware"
+          go test $(go list ./test/... | grep -v /test/smoke$) $INTERNAL_PKG \
             -race -count=1 -timeout 120s \
-            -coverpkg=$(go list ./internal/... ./pkg/... | paste -sd,) \
+            -coverpkg=$(go list ./internal/... ./pkg/... ./cmd/... | paste -sd,) \
             -coverprofile=coverage.out
           pct=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
           echo "Total coverage: ${pct}%"

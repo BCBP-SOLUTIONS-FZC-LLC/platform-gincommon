@@ -1,0 +1,28 @@
+graph LR
+    subgraph service["Consuming service (your code)"]
+        main["main.go"]
+        routes["router.go\nr.Use(middlewares...)\nr.GET('/users', RequirePermission(...))"]
+    end
+
+    subgraph lib["platform-gincommon"]
+        logger_new["pkg/logger.NewLogger(env)"]
+        init_tr["pkg/gincommon.InitTracingFromEnv()"]
+        obs_mw["pkg/gincommon.ObservabilityMiddlewares(cfg)"]
+        prot_mw["pkg/gincommon.ProtectedMiddlewares(cfg)"]
+        def_mw["pkg/gincommon.DefaultMiddlewares(cfg)"]
+        rp["pkg/gincommon.RequirePermissionWithLogger\n(action, resource, auth, logger)"]
+        grpc_mw["pkg/grpccommon.DefaultUnaryInterceptors(cfg)"]
+    end
+
+    main -->|"APP_ENV"| logger_new
+    main -->|"OTEL_* env vars"| init_tr
+    logger_new -->|"port.Logger"| obs_mw
+    logger_new -->|"port.Logger"| prot_mw
+    obs_mw -->|"[]gin.HandlerFunc"| routes
+    prot_mw -->|"[]gin.HandlerFunc"| routes
+    main -->|"cfg{Logger, ServiceName}"| def_mw
+    def_mw -->|"[]gin.HandlerFunc"| routes
+    logger_new -->|"port.Logger"| rp
+    rp -->|"gin.HandlerFunc"| routes
+    main -->|"cfg{ServiceName}"| grpc_mw
+    grpc_mw -->|"[]grpc.UnaryServerInterceptor"| main

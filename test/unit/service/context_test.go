@@ -24,7 +24,7 @@ func TestContextService_BuildContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, err := svc.BuildContext(tt.tid, tt.uid, []string{"admin"}, "trace-1")
+			ctx, err := svc.BuildContext(tt.tid, tt.uid, []string{"admin"}, "trace-1", "")
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("BuildContext() err = %v, want %v", err, tt.wantErr)
