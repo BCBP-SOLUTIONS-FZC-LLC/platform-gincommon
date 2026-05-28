@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.1.0] - 2026-05-29
+
 ### Added
 
 - **`pkg/grpccommon`:** `Config.Tracing *TracingOptions` field — gRPC services can now override OTLP endpoint, insecure mode, sample ratio, and baggage propagation without importing `pkg/gincommon`.
@@ -48,8 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`metrics/metrics.go`:** `Init` now takes `initMu` inside `initOnce.Do` — eliminates a theoretical race-detector flag when readers start before `Init` returns.
 - **`CLAUDE.md`:** Corrected RBAC description — "all other combinations are permitted" was wrong; all non-read, non-delete actions are denied by the reference `RBACService`.
 
----
-
 ## [1.0.0] - 2026-05-26
 
 First stable release of the shared Gin/gRPC middleware library.
@@ -79,5 +81,6 @@ First stable release of the shared Gin/gRPC middleware library.
 
 - **`ContextMiddleware`:** Accepts `port.ContextBuilder` (interface) instead of `*service.ContextService` (concrete type). `internal` package only; public API and all existing call sites are unaffected.
 
+[1.1.0]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/releases/tag/v1.0.0
-[Unreleased]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/compare/v1.1.0...HEAD
