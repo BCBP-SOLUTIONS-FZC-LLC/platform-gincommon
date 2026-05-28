@@ -1,0 +1,48 @@
+sequenceDiagram
+    participant Client as gRPC Client
+    participant PR as PanicRecovery
+    participant RI as RequestID
+    participant TR as Tracing
+    participant ME as Metrics
+    participant LO as Logging
+    participant AU as RequireAuth
+    participant CM as ContextInterceptor
+    participant H as gRPC Handler
+
+    Note over PR,CM: Registered via FullUnaryInterceptors(cfg)\nmetrics.Init called once (sync.Once)
+
+    Client ->>+ PR: Unary RPC call
+    Note over PR: defer recover() → codes.Internal on panic
+
+    PR ->>+ RI: next
+    Note over RI: read/generate x-request-id\nstore in Go context
+
+    RI ->>+ TR: next
+    Note over TR: extract traceparent\nstart OTel server span (scope=ServiceName)
+
+    TR ->>+ ME: next
+    Note over ME: record grpc_inflight +1\ndefer: observe duration + sizes
+
+    ME ->>+ LO: next
+    Note over LO: defer: structured grpc_request log\nInfo(OK) / Warn(client) / Error(server)
+
+    LO ->>+ AU: next
+    alt missing x-user-id or x-tenant-id
+        AU -->> Client: codes.Unauthenticated
+    else metadata valid
+        AU ->>+ CM: next
+        Note over CM: build RequestContext{UserID,TenantID,Roles,ClientIP}\nstore in Go context via domain.ContextWithRequestContext
+
+        CM ->>+ H: next
+        H -->>- CM: response, error
+        CM -->>- AU: return
+        AU -->>- LO: return
+    end
+
+    LO -->>- ME: return
+    Note over LO: grpc_request log written
+    ME -->>- TR: return
+    Note over ME: metrics observed
+    TR -->>- RI: return
+    RI -->>- PR: return
+    PR -->>- Client: response

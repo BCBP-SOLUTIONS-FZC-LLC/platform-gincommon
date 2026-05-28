@@ -23,14 +23,15 @@ func ContextMiddleware(ctxSvc port.ContextBuilder) gin.HandlerFunc {
 			userID,
 			domain.ParseRoles(c.GetHeader(domain.HeaderTenantRoles)),
 			traceIDFromContext(c),
+			c.ClientIP(),
 		)
 		if err != nil {
 			if errors.Is(err, domain.ErrMissingTenant) {
-				writeJSONError(c, http.StatusBadRequest, "missing tenant id")
+				writeJSONError(c, http.StatusUnauthorized, "missing tenant id")
 				return
 			}
 			if errors.Is(err, domain.ErrMissingUser) {
-				writeJSONError(c, http.StatusBadRequest, "missing user id")
+				writeJSONError(c, http.StatusUnauthorized, "missing user id")
 				return
 			}
 			writeJSONError(c, http.StatusBadRequest, "invalid request context")

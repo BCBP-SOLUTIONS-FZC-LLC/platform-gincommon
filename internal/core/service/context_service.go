@@ -11,7 +11,7 @@ func NewContextService() *ContextService {
 }
 
 // BuildContext assembles RequestContext or returns ErrMissingTenant / ErrMissingUser.
-func (s *ContextService) BuildContext(tid, uid string, roles []string, trace string) (*domain.RequestContext, error) {
+func (s *ContextService) BuildContext(tid, uid string, roles []string, trace string, clientIP string) (*domain.RequestContext, error) {
 
 	if tid == "" {
 		return nil, domain.ErrMissingTenant
@@ -26,5 +26,6 @@ func (s *ContextService) BuildContext(tid, uid string, roles []string, trace str
 		UserID:   uid,
 		Roles:    roles,
 		TraceID:  trace,
+		ClientIP: clientIP,
 	}, nil
 }

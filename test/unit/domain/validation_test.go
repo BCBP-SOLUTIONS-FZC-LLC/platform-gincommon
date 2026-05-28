@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,11 +25,17 @@ func TestNormalizeHeaderValue(t *testing.T) {
 
 func TestParseRoles(t *testing.T) {
 	roles := domain.ParseRoles(" admin, user ,admin, bad role ")
-	if len(roles) != 2 {
-		t.Fatalf("roles = %v, want [admin user]", roles)
+	// Pin count AND order: first occurrence wins, input order preserved.
+	want := []string{"admin", "user"}
+	if !reflect.DeepEqual(roles, want) {
+		t.Fatalf("roles = %v, want %v", roles, want)
 	}
 	if got := domain.ParseRoles("!!!"); len(got) != 0 {
 		t.Fatalf("invalid roles = %v", got)
+	}
+	// Empty/nil input.
+	if got := domain.ParseRoles(""); got != nil {
+		t.Fatalf("empty ParseRoles = %v, want nil", got)
 	}
 }
 

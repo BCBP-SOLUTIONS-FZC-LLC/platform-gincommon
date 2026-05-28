@@ -1,0 +1,45 @@
+graph LR
+    subgraph req["Per-request (HTTP)"]
+        pr["PanicRecoveryMiddleware\n· defer recover()\n· log panic + stack trace\n· record OTel error on span\n· emit http_panic_total metric\n· return 500 JSON"]
+        ri["RequestIDMiddleware\n· read x-request-id or generate UUID\n· store in Gin context\n· echo X-Request-ID header"]
+        tr["TracingMiddleware\n· extract W3C traceparent\n· start OTel HTTP span\n· set span attributes (method, route, status)\n· echo X-Trace-ID header"]
+        ch["CorrelationHeadersMiddleware\n· propagate trace + request headers\n· downstream calls inherit context"]
+        me["MetricsMiddleware\n· increment http_active_requests\n· defer: observe duration, sizes, status class\n· log WARN on 429"]
+        lo["LoggingMiddleware\n· defer: structured http_request log\n· sanitizes raw header values\n(control chars stripped, ≤256 bytes)"]
+    end
+
+    subgraph prom["Prometheus metrics (HTTP)"]
+        p1["http_requests_total\nlabels: method · route · status_class · error_class"]
+        p2["http_request_duration_seconds\nlabels: method · route · status_class · error_class"]
+        p3["http_request_size_bytes"]
+        p4["http_response_size_bytes"]
+        p5["http_active_requests\nlabels: route"]
+        p6["http_panic_total\nlabels: method · route"]
+        p7["rate_limited_requests_total\nlabels: method · route"]
+        p8["build_info (gauge=1)\nconst: service · version"]
+    end
+
+    subgraph grpc_m["Prometheus metrics (gRPC)"]
+        g1["grpc_requests_total"]
+        g2["grpc_request_duration_seconds"]
+        g3["grpc_request_size_bytes"]
+        g4["grpc_response_size_bytes"]
+        g5["grpc_inflight"]
+        g6["grpc_rate_limited_requests_total"]
+    end
+
+    subgraph otel["OpenTelemetry"]
+        ot1["HTTP spans\nTracingMiddleware → OTel HTTP span\nPanicRecovery → span error annotation"]
+        ot2["OTLP/gRPC export\n→ OTel Collector → Tempo"]
+    end
+
+    me --> p1
+    me --> p2
+    me --> p3
+    me --> p4
+    me --> p5
+    pr --> p6
+    me --> p7
+    tr --> ot1
+    pr --> ot1
+    ot1 --> ot2

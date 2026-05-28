@@ -76,3 +76,25 @@ func TestInitTelemetry_WithBaggage(t *testing.T) {
 		t.Fatalf("tracer provider type = %T, want *sdktrace.TracerProvider", gootel.GetTracerProvider())
 	}
 }
+
+// TestEnsureInitTelemetry_CallsActiveShutdownBeforeReplace exercises the
+// `if activeShutdown != nil { activeShutdown(); activeShutdown = nil }` branch
+// inside EnsureInitTelemetry when no SDK provider is currently installed.
+func TestEnsureInitTelemetry_ReplacesNoopProvider(t *testing.T) {
+	// Start from a known-clean state: noop provider, no activeShutdown.
+	otel.Shutdown()
+	t.Cleanup(otel.Shutdown)
+
+	// EnsureInit when provider is noop → should install a new SDK provider.
+	otel.EnsureInit("ensure-svc", "1.0.0", "")
+	if _, ok := gootel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
+		t.Fatalf("after EnsureInit, provider type = %T, want *sdktrace.TracerProvider", gootel.GetTracerProvider())
+	}
+
+	// EnsureInit again → SDK provider already set; must be a no-op (no second install).
+	first := gootel.GetTracerProvider()
+	otel.EnsureInit("ensure-svc-2", "2.0.0", "")
+	if gootel.GetTracerProvider() != first {
+		t.Fatal("second EnsureInit replaced an already-installed SDK TracerProvider")
+	}
+}

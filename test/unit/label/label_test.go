@@ -25,14 +25,17 @@ func TestHTTPRoute_KnownPath(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/users/1", nil))
 }
 
-func TestHTTPRoute_FallsBackToURLPath(t *testing.T) {
+func TestHTTPRoute_UnregisteredRoute_ReturnsUnknown(t *testing.T) {
+	// Unregistered routes must return Unknown, never the raw URL path.
+	// Using the raw path as a Prometheus label causes unbounded cardinality
+	// from scanner probes and path-parameter abuse.
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
 
-	if got := label.HTTPRoute(c); got != "/metrics" {
-		t.Fatalf("HTTPRoute = %q, want /metrics", got)
+	if got := label.HTTPRoute(c); got != label.Unknown {
+		t.Fatalf("HTTPRoute = %q, want %q (never raw path)", got, label.Unknown)
 	}
 }
 

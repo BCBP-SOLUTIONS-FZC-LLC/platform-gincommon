@@ -64,7 +64,7 @@ jobs:
       - name: Vulnerability check
         # Scope to library packages only — cmd/server is a demo binary and its
         # stdlib call graph (net/tls, html/template) produces noise, not library risk.
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./internal/... ./pkg/...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./internal/... ./pkg/...
 
       - name: Test (race detector)
         run: make test-ci

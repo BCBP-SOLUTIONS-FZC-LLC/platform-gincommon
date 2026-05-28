@@ -1,0 +1,59 @@
+graph TD
+    subgraph pub["Public API  —  pkg/"]
+        gincommon_pkg["pkg/gincommon\nConfig · TracingOptions\nDefaultMiddlewares · ObservabilityMiddlewares\nProtectedMiddlewares\nTimeoutMiddleware · HealthHandler · ErrorResponse\nPropagateHeaders\nRequirePermission · RequirePermissionWithLogger\nInitTracing · EnsureTracing · InitTracingFromEnv\nNewRBAC"]
+        grpccommon_pkg["pkg/grpccommon\nConfig{ServiceName,BuildVersion,Logger}\nObservabilityUnaryInterceptors · ObservabilityStreamInterceptors\nProtectedUnaryInterceptors · ProtectedStreamInterceptors\nFullUnaryInterceptors · FullStreamInterceptors\nDefaultUnaryInterceptors · DefaultStreamInterceptors\nRequirePermission · RequirePermissionWithLogger\nRequestContextFromContext · RequestIDFromContext"]
+        logger_pkg["pkg/logger\nNewLogger"]
+    end
+
+    subgraph adapters_in["Inbound Adapters  —  internal/adapter/inbound/"]
+        http_mw["http/middleware\nPanicRecoveryMiddleware · RequestIDMiddleware\nTracingMiddleware · CorrelationHeadersMiddleware\nMetricsMiddleware · LoggingMiddleware\nRequireAuth · ContextMiddleware · AuthZMiddleware"]
+        grpc_mw["grpc/middleware\nUnaryMetricsInterceptor · StreamMetricsInterceptor\nUnaryPanicRecoveryInterceptor · StreamPanicRecoveryInterceptor\nUnaryRequestIDInterceptor · StreamRequestIDInterceptor\nUnaryTracingInterceptor · StreamTracingInterceptor\nUnaryLoggingInterceptor · StreamLoggingInterceptor\nUnaryRequireAuthInterceptor · StreamRequireAuthInterceptor\nUnaryContextInterceptor · StreamContextInterceptor\nUnaryAuthZInterceptor · StreamAuthZInterceptor"]
+        label_pkg["label\nHTTPRoute label resolver"]
+    end
+
+    subgraph adapters_out["Outbound Adapters  —  internal/adapter/outbound/"]
+        logger_adp["logger\nNewLogger · NewZapLogger → port.Logger"]
+        metrics_adp["metrics\nHTTP + gRPC Prometheus collectors\nInit · InitWithRegisterer"]
+        otel_adp["otel\nInitTelemetry · EnsureInitTelemetry\nShutdown · TelemetryConfig"]
+    end
+
+    subgraph core["Core  —  internal/core/"]
+        service_pkg["service\nContextService · RBACService · LogSanitizer"]
+        port_pkg["port\nLogger · Authorizer · ContextService"]
+        domain_pkg["domain\nRequestContext{TenantID,UserID,Roles,TraceID,ClientIP}\ntransport constants · ErrForbidden · ErrInternal\nNormalizeHeaderValue\nContextWithRequestContext · RequestContextFromGoContext"]
+    end
+
+    subgraph infra["Infrastructure"]
+        config_pkg["internal/config\nenv var loading\nBuildVersion · OtelExporterEndpoint\nOtelExporterInsecure · OtelTraceSampleRatio"]
+    end
+
+    subgraph tests["Tests  —  test/"]
+        test_unit["unit/\nno live server · MockLogger"]
+        test_int["integration/\nin-process httptest server"]
+        test_e2e["e2e/\nfull server startup"]
+        fixtures_pkg["fixtures/\nMockLogger · HTTP helpers"]
+    end
+
+    gincommon_pkg  --> http_mw
+    gincommon_pkg  --> metrics_adp
+    gincommon_pkg  --> otel_adp
+    gincommon_pkg  --> config_pkg
+    gincommon_pkg  --> service_pkg
+    gincommon_pkg  --> port_pkg
+    grpccommon_pkg --> grpc_mw
+    grpccommon_pkg --> metrics_adp
+    logger_pkg     --> logger_adp
+    http_mw        --> domain_pkg
+    http_mw        --> port_pkg
+    http_mw        --> service_pkg
+    http_mw        --> label_pkg
+    grpc_mw        --> metrics_adp
+    service_pkg    --> port_pkg
+    service_pkg    --> domain_pkg
+    logger_adp     --> port_pkg
+    test_unit      -.->|"imports"| gincommon_pkg
+    test_unit      -.->|"imports"| grpccommon_pkg
+    test_int       -.->|"imports"| gincommon_pkg
+    test_e2e       -.->|"imports"| gincommon_pkg
+    test_int       -.-> fixtures_pkg
+    test_e2e       -.-> fixtures_pkg

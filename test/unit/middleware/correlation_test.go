@@ -17,7 +17,7 @@ func TestCorrelationHeadersMiddleware_SetsHeadersOnSuccess(t *testing.T) {
 	r := gin.New()
 	r.Use(
 		middleware.RequestIDMiddleware(),
-		middleware.TracingMiddleware(),
+		middleware.TracingMiddleware(""),
 		middleware.CorrelationHeadersMiddleware(),
 	)
 	r.GET("/ok", func(c *gin.Context) { c.Status(http.StatusOK) })

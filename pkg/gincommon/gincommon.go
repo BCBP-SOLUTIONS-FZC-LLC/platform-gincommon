@@ -1,6 +1,8 @@
 package gincommon
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
@@ -16,7 +18,7 @@ import (
 // Identity headers (x-user-id, x-tenant-id, x-tenant-roles) must be set by a trusted API
 // gateway. ProtectedMiddlewares validates format but does not cryptographically verify identity.
 type Config struct {
-	// Logger emits structured logs (http_request, panics). Required for ObservabilityMiddlewares.
+	// Logger emits structured logs (http_request, panics). Nil disables all logging (no-op).
 	Logger port.Logger
 	// ServiceName is the Prometheus const label and OTEL service.name.
 	ServiceName string
@@ -56,7 +58,7 @@ func ObservabilityMiddlewares(cfg Config) []gin.HandlerFunc {
 	return []gin.HandlerFunc{
 		middleware.PanicRecoveryMiddleware(cfg.Logger),
 		middleware.RequestIDMiddleware(),
-		middleware.TracingMiddleware(),
+		middleware.TracingMiddleware(cfg.ServiceName),
 		middleware.CorrelationHeadersMiddleware(),
 		middleware.MetricsMiddleware(cfg.Logger),
 		middleware.LoggingMiddleware(cfg.Logger),
@@ -77,6 +79,12 @@ func DefaultMiddlewares(cfg Config) []gin.HandlerFunc {
 	mw := ObservabilityMiddlewares(cfg)
 	mw = append(mw, ProtectedMiddlewares(cfg)...)
 	return mw
+}
+
+// TimeoutMiddleware sets a per-request context deadline.
+// Insert before ObservabilityMiddlewares or ProtectedMiddlewares in the router.
+func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
+	return middleware.TimeoutMiddleware(timeout)
 }
 
 func resolveTelemetry(cfg Config) otel.TelemetryConfig {

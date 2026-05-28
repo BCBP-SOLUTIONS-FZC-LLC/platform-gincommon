@@ -24,12 +24,12 @@ func PanicRecoveryMiddleware(logger port.Logger) gin.HandlerFunc {
 		defer func() {
 			if err := recover(); err != nil {
 
-				// Resolve path
+				// Resolve path — use the registered route template for the log field to
+				// prevent log injection from attacker-controlled raw URL paths.
 				route := label.HTTPRoute(c)
-				if route == "" {
-					route = c.Request.URL.Path
-				}
-				path := c.Request.URL.Path
+				// sanitizeLogValue strips control chars and truncates; apply to the
+				// raw path for human-readable context only when no template matched.
+				rawPath := sanitizeLogValue(c.Request.URL.Path)
 
 				// Log panic; fall back to stderr when no structured logger is configured.
 				stack := debug.Stack()
@@ -38,15 +38,15 @@ func PanicRecoveryMiddleware(logger port.Logger) gin.HandlerFunc {
 						"error_category": "runtime",
 						"error_type":     "panic",
 						"error_source":   "middleware",
-						"panic":          fmt.Sprint(err),
+						"panic":          sanitizeLogValue(fmt.Sprint(err)),
 						"stack":          string(stack),
 						"method":         c.Request.Method,
 						"route":          route,
-						"path":           path,
+						"path":           rawPath,
 						"status":         http.StatusInternalServerError,
 						"trace_id":       traceIDFromContext(c),
 						"request_id":     requestIDFromContext(c),
-						"duration":       time.Since(start),
+						"duration_ms":    float64(time.Since(start).Nanoseconds()) / 1e6,
 					})
 					logger.Error("panic recovered", fields)
 				} else {

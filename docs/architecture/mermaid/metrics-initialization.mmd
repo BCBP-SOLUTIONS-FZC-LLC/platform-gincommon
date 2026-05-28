@@ -1,0 +1,15 @@
+flowchart TD
+    A([metrics.Init called]) --> B{sync.Once\nalready fired?}
+    B -- yes --> Z([no-op — return])
+    B -- no  --> C[normalize empty buildVersion → "unknown"]
+    C --> D[initMetricsWithRegisterer\nwith prometheus.DefaultRegisterer]
+    D --> E[build constLabels\nservice=serviceName\nversion=buildVersion]
+    E --> F[create HTTP collectors\nHttpRequestsTotal · HttpRequestDuration\nHttpRequestSizeBytes · HttpResponseSizeBytes\nHttpActiveRequests · HttpPanicTotal\nRateLimitedRequestsTotal · BuildInfo]
+    F --> G[initGRPCMetrics\nGrpcRequestsTotal · GrpcRequestDuration\nGrpcRequestSizeBytes · GrpcResponseSizeBytes\nGrpcInflight · GrpcRateLimitedRequestsTotal]
+    G --> H[reg.MustRegister all collectors]
+    H --> I[BuildInfo.WithLabelValues.Set 1]
+    I --> J([return — vars are non-nil])
+
+    A2([metrics.InitWithRegisterer called]) --> C2[normalize empty buildVersion]
+    C2 --> D2[initMetricsWithRegisterer\nwith provided registerer]
+    D2 --> E

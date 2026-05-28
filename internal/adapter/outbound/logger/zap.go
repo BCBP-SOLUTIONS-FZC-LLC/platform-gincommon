@@ -11,11 +11,11 @@ type ZapLogger struct {
 	log *zap.Logger
 }
 
-// NewLogger builds a ZapLogger from env: development config when env is "dev",
-// production config otherwise.
+// NewLogger builds a ZapLogger. Development (console-friendly) config is used when env is
+// "dev", "development", or "local"; production JSON config is used for all other values.
 func NewLogger(env string) (*ZapLogger, error) {
 	var cfg zap.Config
-	if env == "dev" {
+	if isDevEnv(env) {
 		cfg = zap.NewDevelopmentConfig()
 	} else {
 		cfg = zap.NewProductionConfig()
@@ -99,7 +99,14 @@ func (l *ZapLogger) Error(msg string, fields map[string]interface{}) {
 	l.write(l.log.Error, msg, fields)
 }
 
-// Fatal logs at fatal level and exits the process.
-func (l *ZapLogger) Fatal(msg string, fields map[string]interface{}) {
-	l.write(l.log.Fatal, msg, fields)
+// Sync flushes any buffered log entries. Call before process exit to avoid
+// dropping the last log lines when the OS terminates the process.
+func (l *ZapLogger) Sync() error {
+	return l.log.Sync()
 }
+
+// isDevEnv mirrors config.IsDevEnv without importing the config package.
+func isDevEnv(env string) bool {
+	return env == "dev" || env == "development" || env == "local"
+}
+

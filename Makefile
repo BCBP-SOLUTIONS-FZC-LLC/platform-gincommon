@@ -25,8 +25,12 @@ export OTEL_SERVICE_NAME OTEL_EXPORTER_OTLP_ENDPOINT
 export OTEL_COLLECTOR_GRPC_PORT OTEL_COLLECTOR_HTTP_PORT LOKI_HTTP_PORT PROMETHEUS_HTTP_PORT GRAFANA_HTTP_PORT
 export PROMETHEUS_SCRAPE_TARGET TEST_SERVICE_NAME E2E_SERVICE_NAME
 
-# Test packages (exclude smoke — needs optional live server)
-TEST_PKGS := $(shell $(GO) list ./test/... | grep -v /test/smoke$$)
+# Test packages (exclude smoke — needs optional live server).
+# Include the grpc middleware internal package so coverage_test.go files that
+# test unexported functions (splitFullMethod, metadataCarrier, clientIPFromContext)
+# are executed and counted toward coverage.
+INTERNAL_TEST_PKGS := github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/grpc/middleware
+TEST_PKGS := $(shell $(GO) list ./test/... | grep -v /test/smoke$$) $(INTERNAL_TEST_PKGS)
 
 # Production packages measured for coverage when running tests under ./test/
 COVER_PKGS := $(shell $(GO) list ./internal/... ./pkg/... ./cmd/...)
@@ -74,6 +78,10 @@ tidy:
 .PHONY: fmt
 fmt:
 	$(GO) fmt ./...
+
+.PHONY: fmt-check
+fmt-check:
+	@files=$$(gofmt -l .); if [ -n "$$files" ]; then echo "gofmt violations:"; echo "$$files"; exit 1; fi
 
 .PHONY: vet
 vet:
@@ -172,8 +180,18 @@ clean:
 # CI HELPERS
 # -----------------------------
 
+.PHONY: vulncheck
+vulncheck:
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./internal/... ./pkg/...
+
+.PHONY: cover-check
+cover-check:
+	$(GO) test $(TEST_PKGS) -race -count=1 -timeout 120s -coverpkg=$(COVER_PKG_LIST) -coverprofile=coverage.out
+	@pct=$$($(GO) tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
+	 awk -v p="$$pct" 'BEGIN { if (p+0 < 95) { print "FAIL: " p "% is below 95%"; exit 1 } else { print "PASS: " p "%" } }'
+
 .PHONY: ci
-ci: tidy vet lint test-ci build
+ci: fmt-check tidy vet lint test-ci cover-check build
 
 # -----------------------------
 # COVERAGE

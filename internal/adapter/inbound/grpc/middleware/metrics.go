@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
@@ -12,47 +13,72 @@ import (
 )
 
 // UnaryMetricsInterceptor records Prometheus metrics for unary RPCs.
+// Uses a panicked-sentinel defer so that panicking handlers are still counted in
+// grpc_requests_total (as codes.Internal), matching HTTP MetricsMiddleware behaviour.
 func UnaryMetricsInterceptor() grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
 		req any,
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
-	) (any, error) {
+	) (resp any, err error) {
 		if metrics.GrpcInflight == nil {
 			return handler(ctx, req)
 		}
 		method := label.GRPCMethod(info.FullMethod)
 		metrics.GrpcInflight.WithLabelValues(method).Inc()
-		defer metrics.GrpcInflight.WithLabelValues(method).Dec()
-
 		start := time.Now()
-		resp, err := handler(ctx, req)
-		observeGRPC(method, time.Since(start), err, metrics.ProtoMessageSize(req), metrics.ProtoMessageSize(resp))
-		return resp, err
+		panicked := true
+
+		defer func() {
+			metrics.GrpcInflight.WithLabelValues(method).Dec()
+			observeErr := err
+			if panicked {
+				metrics.RecordGRPCPanic(method)
+				observeErr = status.Error(codes.Internal, "panic")
+			}
+			observeGRPC(method, time.Since(start), observeErr,
+				metrics.ProtoMessageSize(req), metrics.ProtoMessageSize(resp))
+		}()
+
+		resp, err = handler(ctx, req)
+		panicked = false
+		return
 	}
 }
 
 // StreamMetricsInterceptor records Prometheus metrics for streaming RPCs.
+// Uses a panicked-sentinel defer so that panicking handlers are still counted in metrics.
 func StreamMetricsInterceptor() grpc.StreamServerInterceptor {
 	return func(
 		srv any,
 		ss grpc.ServerStream,
 		info *grpc.StreamServerInfo,
 		handler grpc.StreamHandler,
-	) error {
+	) (err error) {
 		if metrics.GrpcInflight == nil {
 			return handler(srv, ss)
 		}
 		method := label.GRPCMethod(info.FullMethod)
 		metrics.GrpcInflight.WithLabelValues(method).Inc()
-		defer metrics.GrpcInflight.WithLabelValues(method).Dec()
-
 		wrapped := &monitoredServerStream{ServerStream: ss}
 		start := time.Now()
-		err := handler(srv, wrapped)
-		observeGRPC(method, time.Since(start), err, wrapped.recvBytes, wrapped.sentBytes)
-		return err
+		panicked := true
+
+		defer func() {
+			metrics.GrpcInflight.WithLabelValues(method).Dec()
+			observeErr := err
+			if panicked {
+				metrics.RecordGRPCPanic(method)
+				observeErr = status.Error(codes.Internal, "panic")
+			}
+			rb, sb := wrapped.bytes()
+			observeGRPC(method, time.Since(start), observeErr, rb, sb)
+		}()
+
+		err = handler(srv, wrapped)
+		panicked = false
+		return
 	}
 }
 
@@ -79,8 +105,12 @@ func observeGRPC(method string, elapsed time.Duration, err error, reqSize, respS
 	)
 }
 
+// monitoredServerStream wraps a gRPC ServerStream to track message byte counts.
+// mu protects recvBytes and sentBytes because bidirectional streaming handlers
+// may call RecvMsg and SendMsg concurrently from separate goroutines.
 type monitoredServerStream struct {
 	grpc.ServerStream
+	mu        sync.Mutex
 	recvBytes float64
 	sentBytes float64
 }
@@ -89,7 +119,9 @@ func (s *monitoredServerStream) RecvMsg(m any) error {
 	if err := s.ServerStream.RecvMsg(m); err != nil {
 		return err
 	}
+	s.mu.Lock()
 	s.recvBytes += metrics.ProtoMessageSize(m)
+	s.mu.Unlock()
 	return nil
 }
 
@@ -97,6 +129,14 @@ func (s *monitoredServerStream) SendMsg(m any) error {
 	if err := s.ServerStream.SendMsg(m); err != nil {
 		return err
 	}
+	s.mu.Lock()
 	s.sentBytes += metrics.ProtoMessageSize(m)
+	s.mu.Unlock()
 	return nil
+}
+
+func (s *monitoredServerStream) bytes() (recv, sent float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recvBytes, s.sentBytes
 }

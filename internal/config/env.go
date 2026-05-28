@@ -19,8 +19,16 @@ func AppName() string { return getenv("APP_NAME", "platform-gincommon") }
 // BuildVersion returns BUILD_VERSION (default unknown).
 func BuildVersion() string { return getenv("BUILD_VERSION", "unknown") }
 
-// AppEnv returns APP_ENV (default dev).
-func AppEnv() string { return getenv("APP_ENV", "dev") }
+// AppEnv returns APP_ENV. Returns empty string when not set so that callers such as
+// OtelTraceSampleRatio default to production-safe values rather than dev defaults.
+func AppEnv() string { return os.Getenv("APP_ENV") }
+
+// IsDevEnv reports whether env is a local/development environment.
+// Recognised values: "dev", "development", "local". Everything else (including
+// an empty string) is treated as non-dev so production-safe defaults apply.
+func IsDevEnv(env string) bool {
+	return env == "dev" || env == "development" || env == "local"
+}
 
 // AppPort returns APP_PORT (default 8080).
 func AppPort() int { return getenvInt("APP_PORT", 8080) }
@@ -48,8 +56,7 @@ func OtelExporterInsecure() bool {
 	case "false", "0", "no":
 		return false
 	default:
-		appEnv := os.Getenv("APP_ENV")
-		return appEnv == "dev" || appEnv == "development" || appEnv == "local"
+		return IsDevEnv(os.Getenv("APP_ENV"))
 	}
 }
 
@@ -68,14 +75,14 @@ func OtelEnableBaggage() bool {
 func OtelTraceSampleRatio() float64 {
 	v := os.Getenv("OTEL_TRACES_SAMPLER_RATIO")
 	if v == "" {
-		if AppEnv() == "dev" {
+		if IsDevEnv(AppEnv()) {
 			return 1.0
 		}
 		return 0.1
 	}
 	n, err := strconv.ParseFloat(v, 64)
 	if err != nil || n < 0 || n > 1 {
-		if AppEnv() == "dev" {
+		if IsDevEnv(AppEnv()) {
 			return 1.0
 		}
 		return 0.1

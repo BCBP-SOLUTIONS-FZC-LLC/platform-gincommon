@@ -8,9 +8,17 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 )
 
-// NewRBAC returns a reference port.Authorizer for demos and tests (not for production IAM).
-func NewRBAC() *service.RBACService {
+// NewDemoRBAC returns a reference port.Authorizer for demos and tests only — not for production IAM.
+// Logic: "read" is always permitted; "delete" requires the "admin" role; all other actions are denied.
+func NewDemoRBAC() *service.RBACService {
 	return service.NewRBACService()
+}
+
+// NewRBAC is a deprecated alias for NewDemoRBAC. Use NewDemoRBAC in new code.
+//
+// Deprecated: use NewDemoRBAC.
+func NewRBAC() *service.RBACService {
+	return NewDemoRBAC()
 }
 
 // RequirePermission returns Gin middleware that calls auth.Authorize for the route action/resource.

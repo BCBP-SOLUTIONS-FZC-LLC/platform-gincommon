@@ -6,6 +6,7 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,7 +35,7 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 		}
 
 		ctx, ok := ctxVal.(*domain.RequestContext)
-		if !ok {
+		if !ok || ctx == nil {
 			if logger != nil {
 				logger.Error("authz: invalid request context type", map[string]any{
 					"action": action, "resource": resource,
@@ -44,6 +45,10 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 			return
 		}
 
+		if auth == nil {
+			writeJSONError(c, http.StatusInternalServerError, ErrInternal)
+			return
+		}
 		if err := auth.Authorize(ctx.UserID, ctx.Roles, action, resource); err != nil {
 			if errors.Is(err, domain.ErrForbidden) {
 				if logger != nil {
@@ -62,7 +67,7 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 					"user_id":  ctx.UserID,
 					"action":   action,
 					"resource": resource,
-					"error":    err.Error(),
+					"error":    service.SanitizeString(err.Error()),
 				})
 			}
 			writeJSONError(c, http.StatusInternalServerError, ErrInternal)

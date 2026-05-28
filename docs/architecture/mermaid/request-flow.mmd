@@ -1,0 +1,54 @@
+sequenceDiagram
+    participant Client
+    participant GW as API Gateway
+    participant PR as PanicRecovery
+    participant RI as RequestID
+    participant TR as Tracing
+    participant CH as CorrelationHeaders
+    participant ME as Metrics
+    participant LO as Logging
+    participant AU as RequireAuth
+    participant CM as ContextMiddleware
+    participant H as Handler
+
+    Client ->>+ GW: HTTP request
+    GW ->>+ PR: x-user-id, x-tenant-id injected
+    Note over PR: defer recover()<br/>returns 500 on panic
+
+    PR ->>+ RI: c.Next()
+    Note over RI: read/generate x-request-id<br/>echo X-Request-ID in response
+
+    RI ->>+ TR: c.Next()
+    Note over TR: extract traceparent<br/>start OTel HTTP span<br/>echo X-Trace-ID in response
+
+    TR ->>+ CH: c.Next()
+    Note over CH: propagate trace/correlation<br/>headers to downstream calls
+
+    CH ->>+ ME: c.Next()
+    Note over ME: record http_active_requests +1<br/>defer: observe duration, size, status
+
+    ME ->>+ LO: c.Next()
+    Note over LO: defer: write http_request log<br/>after response (sanitizes headers)
+
+    LO ->>+ AU: c.Next()
+    alt x-user-id or x-tenant-id missing/invalid
+        AU -->> Client: 401 Unauthorized
+    else headers valid
+        AU ->>+ CM: c.Next()
+        Note over CM: build RequestContext<br/>{UserID, TenantID, Roles, TraceID}<br/>store in Gin context
+
+        CM ->>+ H: c.Next()
+        H -->>- CM: response written
+        CM -->>- AU: return
+        AU -->>- LO: return
+    end
+
+    LO -->>- ME: return
+    Note over LO: http_request log written
+    ME -->>- CH: return
+    Note over ME: metrics observed
+    CH -->>- TR: return
+    TR -->>- RI: return
+    RI -->>- PR: return
+    PR -->>- GW: return
+    GW -->>- Client: HTTP response

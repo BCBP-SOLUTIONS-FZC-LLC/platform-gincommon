@@ -3,6 +3,7 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
 	"github.com/gin-gonic/gin"
@@ -13,10 +14,28 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// truncateSpanAttr truncates s to at most max bytes at a UTF-8 rune boundary.
+// Prevents unbounded OTel span attribute values from attacker-controlled inputs.
+func truncateSpanAttr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	i := max
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return s[:i]
+}
+
 // TracingMiddleware creates an OpenTelemetry server span and stores trace_id in Gin context.
-func TracingMiddleware() gin.HandlerFunc {
+// serviceName is used as the OTel tracer scope; defaults to "platform-gincommon/http" when empty.
+func TracingMiddleware(serviceName string) gin.HandlerFunc {
+	scope := serviceName
+	if scope == "" {
+		scope = "platform-gincommon/http"
+	}
 	return func(c *gin.Context) {
-		tracer := otel.Tracer("http-server")
+		tracer := otel.Tracer(scope)
 		method := c.Request.Method
 
 		ctx := otel.GetTextMapPropagator().Extract(
@@ -48,12 +67,17 @@ func TracingMiddleware() gin.HandlerFunc {
 			span.SetAttributes(
 				semconv.HTTPRequestMethodKey.String(method),
 				semconv.HTTPRoute(route),
-				semconv.URLPath(c.Request.URL.Path),
-				semconv.UserAgentOriginal(c.Request.UserAgent()),
+				semconv.URLPath(truncateSpanAttr(c.Request.URL.Path, 512)),
+				semconv.UserAgentOriginal(truncateSpanAttr(c.Request.UserAgent(), 512)),
 				semconv.ServerAddress(c.Request.Host),
 				semconv.ClientAddress(c.ClientIP()),
 			)
 			code := finalCode
+			// finalCode is 0 when a panic interrupted c.Next() before the status was
+			// written (PanicRecoveryMiddleware writes the 500 later, after this defer).
+			// This guard is load-bearing: without it every panicking request produces
+			// a span with http.response_status_code=0, which violates OTel semconv and
+			// breaks trace-based 5xx alerting. Do not remove without updating the panic path.
 			if code == 0 {
 				code = http.StatusInternalServerError
 			}
