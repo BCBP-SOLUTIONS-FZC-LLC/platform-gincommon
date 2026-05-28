@@ -37,4 +37,3 @@ func (m *MockLogger) Warn(msg string, fields map[string]interface{}) {
 func (m *MockLogger) Error(msg string, fields map[string]interface{}) {
 	m.record("error", msg, fields)
 }
-

@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	grpcmw "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/grpc/middleware"
-	gootel "go.opentelemetry.io/otel"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/grpccommon"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	gootel "go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc"
@@ -235,8 +235,8 @@ func TestStreamRequireAuthInterceptor_MissingMetadata_Unauthenticated(t *testing
 
 func authedGRPCContext() context.Context {
 	md := metadata.New(map[string]string{
-		"x-user-id":    "user-1",
-		"x-tenant-id":  "tenant-1",
+		"x-user-id":      "user-1",
+		"x-tenant-id":    "tenant-1",
 		"x-tenant-roles": "admin",
 	})
 	return metadata.NewIncomingContext(context.Background(), md)
@@ -898,8 +898,8 @@ func TestStreamContextInterceptor_WithRoles(t *testing.T) {
 	var capturedRC *domain.RequestContext
 
 	md := metadata.New(map[string]string{
-		"x-user-id":     "u2",
-		"x-tenant-id":   "t2",
+		"x-user-id":      "u2",
+		"x-tenant-id":    "t2",
 		"x-tenant-roles": "admin,editor",
 	})
 	stream := &testServerStream{ctx: metadata.NewIncomingContext(context.Background(), md)}
@@ -1065,7 +1065,6 @@ func TestStreamLoggingInterceptor_PanicPath_LogsInternal(t *testing.T) {
 		t.Fatalf("grpc_code = %v, want %q", v, codes.Internal.String())
 	}
 }
-
 
 // ─── Repeated metadata roles (regression for strings.Join fix) ────────────────
 
