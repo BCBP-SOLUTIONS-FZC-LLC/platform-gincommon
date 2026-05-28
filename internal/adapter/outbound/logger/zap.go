@@ -109,4 +109,3 @@ func (l *ZapLogger) Sync() error {
 func isDevEnv(env string) bool {
 	return env == "dev" || env == "development" || env == "local"
 }
-

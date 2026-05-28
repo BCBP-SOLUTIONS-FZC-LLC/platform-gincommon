@@ -19,11 +19,21 @@ type integrationLogger struct {
 	Fields map[string]interface{}
 }
 
-func (l *integrationLogger) Debug(msg string, fields map[string]interface{}) { l.record("debug", msg, fields) }
-func (l *integrationLogger) Info(msg string, fields map[string]interface{})  { l.record("info", msg, fields) }
-func (l *integrationLogger) Warn(msg string, fields map[string]interface{})  { l.record("warn", msg, fields) }
-func (l *integrationLogger) Error(msg string, fields map[string]interface{}) { l.record("error", msg, fields) }
-func (l *integrationLogger) Fatal(msg string, fields map[string]interface{}) { l.record("fatal", msg, fields) }
+func (l *integrationLogger) Debug(msg string, fields map[string]interface{}) {
+	l.record("debug", msg, fields)
+}
+func (l *integrationLogger) Info(msg string, fields map[string]interface{}) {
+	l.record("info", msg, fields)
+}
+func (l *integrationLogger) Warn(msg string, fields map[string]interface{}) {
+	l.record("warn", msg, fields)
+}
+func (l *integrationLogger) Error(msg string, fields map[string]interface{}) {
+	l.record("error", msg, fields)
+}
+func (l *integrationLogger) Fatal(msg string, fields map[string]interface{}) {
+	l.record("fatal", msg, fields)
+}
 
 func (l *integrationLogger) record(level, msg string, fields map[string]interface{}) {
 	l.Level = level
