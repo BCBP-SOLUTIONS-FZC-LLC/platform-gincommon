@@ -49,7 +49,7 @@ func TestE2E_SecureRouteWithReadPermission(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	log, _ := logger.NewLogger(config.AppEnv())
-	authz := gincommon.NewRBAC()
+	authz := gincommon.NewDemoRBAC()
 
 	r := gin.New()
 	for _, m := range gincommon.DefaultMiddlewares(gincommon.Config{
@@ -79,7 +79,7 @@ func TestE2E_DeleteForbiddenForUserRole(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	log, _ := logger.NewLogger(config.AppEnv())
-	authz := gincommon.NewRBAC()
+	authz := gincommon.NewDemoRBAC()
 
 	r := gin.New()
 	for _, m := range gincommon.DefaultMiddlewares(gincommon.Config{
@@ -109,7 +109,7 @@ func TestE2E_DeleteAllowedForAdminRole(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	log, _ := logger.NewLogger(config.AppEnv())
-	authz := gincommon.NewRBAC()
+	authz := gincommon.NewDemoRBAC()
 
 	r := gin.New()
 	for _, m := range gincommon.DefaultMiddlewares(gincommon.Config{
