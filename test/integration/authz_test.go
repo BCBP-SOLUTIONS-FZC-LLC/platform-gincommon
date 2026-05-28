@@ -22,7 +22,7 @@ func newAuthzRouter(t *testing.T, action, resource string) *gin.Engine {
 		t.Fatalf("logger: %v", err)
 	}
 
-	authz := gincommon.NewRBAC()
+	authz := gincommon.NewDemoRBAC()
 	r := gin.New()
 	for _, m := range gincommon.DefaultMiddlewares(gincommon.Config{Logger: log, ServiceName: "authz-test"}) {
 		r.Use(m)

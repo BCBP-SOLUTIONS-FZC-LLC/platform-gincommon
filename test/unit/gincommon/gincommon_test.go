@@ -19,12 +19,6 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
 )
 
-func TestNewRBAC(t *testing.T) {
-	if gincommon.NewRBAC() == nil {
-		t.Fatal("NewRBAC() returned nil")
-	}
-}
-
 func TestNewDemoRBAC(t *testing.T) {
 	if gincommon.NewDemoRBAC() == nil {
 		t.Fatal("NewDemoRBAC() returned nil")
@@ -277,7 +271,7 @@ func TestObservabilityMiddlewares_WithEmptyTracingOptions(t *testing.T) {
 func TestRequirePermissionWithLogger_ReturnsForbidden(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	auth := gincommon.NewRBAC()
+	auth := gincommon.NewDemoRBAC()
 	log, _ := logger.NewLogger("dev")
 	mw := gincommon.RequirePermissionWithLogger("delete", "items", auth, log)
 
@@ -299,7 +293,7 @@ func TestRequirePermissionWithLogger_ReturnsForbidden(t *testing.T) {
 func TestRequirePermissionWithLogger_AllowsAdmin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	auth := gincommon.NewRBAC()
+	auth := gincommon.NewDemoRBAC()
 	log, _ := logger.NewLogger("dev")
 	handlerCalled := false
 	mw := gincommon.RequirePermissionWithLogger("delete", "items", auth, log)
