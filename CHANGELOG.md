@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.2.0] - 2026-06-03
+
 ### Added
 
 - **`pkg/gincommon`:** `Shutdown(logger port.Logger) error` — graceful telemetry cleanup for HTTP services. Stops the active OpenTelemetry `TracerProvider` (flushing buffered spans) and, when the logger implements `Sync() error`, flushes buffered log entries. Call from `main()` after the HTTP server stops accepting requests.
@@ -99,6 +103,7 @@ First stable release of the shared Gin/gRPC middleware library.
 
 - **`ContextMiddleware`:** Accepts `port.ContextBuilder` (interface) instead of `*service.ContextService` (concrete type). `internal` package only; public API and all existing call sites are unaffected.
 
+[1.2.0]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/releases/tag/v1.0.0
-[Unreleased]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/compare/v1.2.0...HEAD
