@@ -19,8 +19,8 @@ func TestRequestBodySize(t *testing.T) {
 	}
 }
 
-func TestHTTPPayloadSizeBuckets(t *testing.T) {
-	b := metrics.HTTPPayloadSizeBuckets
+func TestPayloadSizeBuckets(t *testing.T) {
+	b := metrics.PayloadSizeBuckets
 	if len(b) < 8 {
 		t.Fatalf("expected at least 8 buckets, got %d", len(b))
 	}

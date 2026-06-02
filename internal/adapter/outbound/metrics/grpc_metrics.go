@@ -27,7 +27,7 @@ func initGRPCMetrics(constLabels prometheus.Labels) {
 	GrpcRequestsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name:        "grpc_server_handled_total",
-			Help:        "Total gRPC server RPCs handled",
+			Help:        "Total gRPC server RPCs handled by method, gRPC status code, status class, and error class",
 			ConstLabels: constLabels,
 		},
 		grpcLabels,
@@ -36,24 +36,19 @@ func initGRPCMetrics(constLabels prometheus.Labels) {
 	GrpcRequestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:        "grpc_server_handling_seconds",
-			Help:        "gRPC server RPC handling duration in seconds",
-			Buckets:     HTTPRequestDurationBuckets,
+			Help:        "gRPC server RPC latency in seconds by method, status class, and error class",
+			Buckets:     RequestDurationBuckets,
 			ConstLabels: constLabels,
 		},
 		grpcOutcomeLabels,
 	)
 
-	sizeOpts := prometheus.HistogramOpts{
-		Buckets:     HTTPPayloadSizeBuckets,
-		ConstLabels: constLabels,
-	}
-
 	GrpcRequestSizeBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:        "grpc_server_request_size_bytes",
 			Help:        "gRPC server request message size in bytes",
-			Buckets:     sizeOpts.Buckets,
-			ConstLabels: sizeOpts.ConstLabels,
+			Buckets:     PayloadSizeBuckets,
+			ConstLabels: constLabels,
 		},
 		grpcOutcomeLabels,
 	)
@@ -62,8 +57,8 @@ func initGRPCMetrics(constLabels prometheus.Labels) {
 		prometheus.HistogramOpts{
 			Name:        "grpc_server_response_size_bytes",
 			Help:        "gRPC server response message size in bytes",
-			Buckets:     sizeOpts.Buckets,
-			ConstLabels: sizeOpts.ConstLabels,
+			Buckets:     PayloadSizeBuckets,
+			ConstLabels: constLabels,
 		},
 		grpcOutcomeLabels,
 	)

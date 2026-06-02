@@ -3,10 +3,41 @@ package logger_test
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/logger"
 )
+
+func TestNewLogger_LogFile(t *testing.T) {
+	t.Setenv("LOG_FILE", filepath.Join(t.TempDir(), "app.log"))
+
+	log, err := logger.NewLogger("dev")
+	if err != nil {
+		t.Fatalf("logger: %v", err)
+	}
+
+	log.Info("http_request", map[string]interface{}{
+		"trace_id": "trace-file-1",
+		"path":     "/health",
+		"status":   200,
+	})
+	_ = log.Sync()
+
+	data, err := os.ReadFile(os.Getenv("LOG_FILE"))
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, `"msg":"http_request"`) {
+		t.Fatalf("expected json log line, got: %s", body)
+	}
+	if !strings.Contains(body, `"trace_id":"trace-file-1"`) {
+		t.Fatalf("expected trace_id in log file, got: %s", body)
+	}
+}
 
 func TestNewLogger_DevAndProd(t *testing.T) {
 	dev, err := logger.NewLogger("dev")

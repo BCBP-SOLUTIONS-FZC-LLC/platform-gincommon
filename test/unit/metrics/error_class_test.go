@@ -11,23 +11,21 @@ func TestRequestOutcome(t *testing.T) {
 	tests := []struct {
 		code      int
 		wantClass string
-		wantError string
 	}{
-		{http.StatusOK, "success", "false"},
-		{http.StatusCreated, "success", "false"},
-		{http.StatusMovedPermanently, "success", "false"},
-		{http.StatusNotFound, "client_error", "true"},
-		{http.StatusUnauthorized, "client_error", "true"},
-		{http.StatusInternalServerError, "server_error", "true"},
-		{0, "server_error", "true"},
-		{199, "server_error", "true"},
+		{http.StatusOK, "success"},
+		{http.StatusCreated, "success"},
+		{http.StatusMovedPermanently, "success"},
+		{http.StatusNotFound, "client_error"},
+		{http.StatusUnauthorized, "client_error"},
+		{http.StatusInternalServerError, "server_error"},
+		{0, "server_error"},
+		{199, "server_error"},
 	}
 
 	for _, tc := range tests {
-		ec, isErr := metrics.RequestOutcome(tc.code)
-		if ec != tc.wantClass || isErr != tc.wantError {
-			t.Errorf("RequestOutcome(%d) = (%q, %q), want (%q, %q)",
-				tc.code, ec, isErr, tc.wantClass, tc.wantError)
+		ec := metrics.RequestOutcome(tc.code)
+		if ec != tc.wantClass {
+			t.Errorf("RequestOutcome(%d) = %q, want %q", tc.code, ec, tc.wantClass)
 		}
 	}
 }
@@ -48,17 +46,5 @@ func TestHTTPStatusClass(t *testing.T) {
 		if got := metrics.HTTPStatusClass(tc.code); got != tc.want {
 			t.Errorf("HTTPStatusClass(%d) = %q, want %q", tc.code, got, tc.want)
 		}
-	}
-}
-
-func TestErrorClassAndHTTPIsError(t *testing.T) {
-	if metrics.ErrorClass(http.StatusOK) != "success" {
-		t.Fatalf("ErrorClass(200) = %q", metrics.ErrorClass(http.StatusOK))
-	}
-	if metrics.HTTPIsError(http.StatusOK) != "false" {
-		t.Fatalf("HTTPIsError(200) = %q", metrics.HTTPIsError(http.StatusOK))
-	}
-	if metrics.HTTPIsError(http.StatusBadRequest) != "true" {
-		t.Fatalf("HTTPIsError(400) = %q", metrics.HTTPIsError(http.StatusBadRequest))
 	}
 }

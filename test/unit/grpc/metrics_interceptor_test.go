@@ -198,9 +198,9 @@ func TestStreamMetricsInterceptor_RecordsError(t *testing.T) {
 }
 
 func TestStreamMetricsInterceptor_NilSafe(t *testing.T) {
-	saved := metrics.GrpcInflight
-	metrics.GrpcInflight = nil
-	defer func() { metrics.GrpcInflight = saved }()
+	saved := metrics.GrpcRequestsTotal
+	metrics.GrpcRequestsTotal = nil
+	defer func() { metrics.GrpcRequestsTotal = saved }()
 
 	ic := grpcmw.StreamMetricsInterceptor()
 	stream := &testServerStream{}
@@ -211,6 +211,25 @@ func TestStreamMetricsInterceptor_NilSafe(t *testing.T) {
 }
 
 func TestUnaryMetricsInterceptor_NilSafe(t *testing.T) {
+	saved := metrics.GrpcRequestsTotal
+	metrics.GrpcRequestsTotal = nil
+	defer func() { metrics.GrpcRequestsTotal = saved }()
+
+	ic := grpcmw.UnaryMetricsInterceptor()
+	_, err := ic(
+		context.Background(),
+		&emptypb.Empty{},
+		&grpc.UnaryServerInfo{FullMethod: "/test.Service/Ping"},
+		func(ctx context.Context, in any) (any, error) { return &emptypb.Empty{}, nil },
+	)
+	if err != nil {
+		t.Fatalf("nil guard err: %v", err)
+	}
+}
+
+// TestUnaryMetricsInterceptor_NilInflight_Skips verifies that niling GrpcInflight
+// (while GrpcRequestsTotal remains set) triggers the combined sentinel without panic.
+func TestUnaryMetricsInterceptor_NilInflight_Skips(t *testing.T) {
 	saved := metrics.GrpcInflight
 	metrics.GrpcInflight = nil
 	defer func() { metrics.GrpcInflight = saved }()
@@ -223,6 +242,21 @@ func TestUnaryMetricsInterceptor_NilSafe(t *testing.T) {
 		func(ctx context.Context, in any) (any, error) { return &emptypb.Empty{}, nil },
 	)
 	if err != nil {
+		t.Fatalf("nil guard err: %v", err)
+	}
+}
+
+// TestStreamMetricsInterceptor_NilInflight_Skips verifies that niling GrpcInflight
+// (while GrpcRequestsTotal remains set) triggers the combined sentinel without panic.
+func TestStreamMetricsInterceptor_NilInflight_Skips(t *testing.T) {
+	saved := metrics.GrpcInflight
+	metrics.GrpcInflight = nil
+	defer func() { metrics.GrpcInflight = saved }()
+
+	ic := grpcmw.StreamMetricsInterceptor()
+	stream := &testServerStream{}
+	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/Stream"}
+	if err := ic(nil, stream, info, func(srv any, ss grpc.ServerStream) error { return nil }); err != nil {
 		t.Fatalf("nil guard err: %v", err)
 	}
 }

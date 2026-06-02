@@ -187,7 +187,7 @@ func main() {
     api.Use(gincommon.ProtectedMiddlewares(cfg)...)
 
     // Reference RBAC (replace with your port.Authorizer in production)
-    authz := gincommon.NewRBAC()
+    authz := gincommon.NewDemoRBAC()
 
     api.GET("/items", listItemsHandler)
     api.DELETE("/items/:id",
@@ -212,6 +212,9 @@ func main() {
     if err := srv.Shutdown(ctx); err != nil {
         panic(err)
     }
+
+    // Flush OpenTelemetry spans and buffered logs before exit.
+    _ = gincommon.Shutdown(log)
 }
 
 func listItemsHandler(c *gin.Context) {
@@ -391,7 +394,7 @@ func (s *itemServer) GetItem(ctx context.Context, req *pb.GetItemRequest) (*pb.G
 Add `RequirePermission` after `ProtectedUnaryInterceptors` for methods that need RBAC:
 
 ```go
-authz := gincommon.NewRBAC() // demo; implement port.Authorizer for production
+authz := grpccommon.NewDemoRBAC() // demo; implement port.Authorizer for production
 
 s := grpc.NewServer(
     grpc.ChainUnaryInterceptor(
@@ -521,7 +524,7 @@ Successful responses include `X-Trace-ID` and `X-Request-ID`. Error JSON include
 | Topic | Guidance |
 |--------|----------|
 | **Trust boundary** | `x-user-id`, `x-tenant-id`, and `x-tenant-roles` must be set by a **trusted API gateway** after authentication. Block direct client access or strip these headers at the edge. |
-| **Authorization** | `NewRBAC()` is a **reference** `port.Authorizer` for tests/demos. Production services must implement `port.Authorizer` with your IAM/OPA policy. |
+| **Authorization** | `NewDemoRBAC()` is a **reference** `port.Authorizer` for tests/demos. Production services must implement `port.Authorizer` with your IAM/OPA policy. |
 | **Roles header** | Roles are validated (`[a-zA-Z0-9_-]+`) and deduplicated but not signed; the gateway must not forward client-supplied role headers. |
 | **HTTP gRPC parity** | `pkg/grpccommon` provides the same auth, context, and RBAC interceptors as `pkg/gincommon`. Use `FullUnaryInterceptors` / `FullStreamInterceptors` to enable them. |
 | **Metrics** | `/metrics` is often public for Prometheus scraping; restrict via network policy, auth proxy, or a dedicated admin port. |
@@ -600,17 +603,19 @@ http.DefaultClient.Do(req)
 | `PropagateHeaders(c, req)` | Inject trace + request ID + identity into outbound `*http.Request` |
 | `RequirePermission(action, resource, auth)` | Per-route RBAC, no logging |
 | `RequirePermissionWithLogger(action, resource, auth, logger)` | Per-route RBAC with audit log |
-| `NewRBAC()` | Reference `port.Authorizer` (demos/tests only) |
+| `NewDemoRBAC()` | Reference `port.Authorizer` (demos/tests only); `NewRBAC()` is a deprecated alias |
 | `RequestContext(c)` | `*domain.RequestContext` from Gin context |
+| `TraceIDFromContext(c)` / `RequestIDFromContext(c)` | Correlation IDs from Gin context |
 | `InitTracing(svc, ver, endpoint)` | Init OTLP export; returns shutdown func |
 | `EnsureTracing(svc, ver, endpoint)` | Init only if no SDK provider registered yet |
 | `InitTracingFromEnv()` | Init from `OTEL_*` env vars |
+| `Shutdown(logger)` | Flush OTel spans + `logger.Sync()`; call from `main()` after server stops |
 
 ## Public API (`pkg/grpccommon`)
 
 | Symbol | Purpose |
 |--------|---------|
-| `Config{ServiceName, BuildVersion, Logger}` | `ServiceName` required. `Logger` enables logging and panic recovery logs. |
+| `Config{ServiceName, BuildVersion, Logger, Tracing}` | `ServiceName` required. `Logger` enables logging and panic recovery logs. `Tracing *TracingOptions` overrides `OTEL_*` env. |
 | `ObservabilityUnaryInterceptors(cfg)` | `[PanicRecovery, RequestID, Tracing, Metrics, Logging]` |
 | `ObservabilityStreamInterceptors(cfg)` | Same for streaming RPCs |
 | `ProtectedUnaryInterceptors(cfg)` | `[RequireAuth, ContextInterceptor]` |
@@ -621,8 +626,12 @@ http.DefaultClient.Do(req)
 | `DefaultStreamInterceptors(cfg)` | Alias for `ObservabilityStreamInterceptors` |
 | `RequirePermission(action, resource, auth)` | Per-RPC RBAC unary interceptor |
 | `RequirePermissionWithLogger(action, resource, auth, logger)` | Per-RPC RBAC with audit log |
+| `RequireStreamPermission(action, resource, auth)` | Per-stream RBAC interceptor |
+| `RequireStreamPermissionWithLogger(action, resource, auth, logger)` | Per-stream RBAC with audit log |
+| `NewDemoRBAC()` | Reference `port.Authorizer` (demos/tests only) |
 | `RequestContextFromContext(ctx)` | `*domain.RequestContext` from gRPC handler context |
 | `RequestIDFromContext(ctx)` | Correlation request ID from gRPC handler context |
+| `Shutdown(logger)` | Flush OTel spans + `logger.Sync()`; call after `GracefulStop` returns |
 
 ## Public API (`pkg/logger`)
 
@@ -641,7 +650,8 @@ http.DefaultClient.Do(req)
 | `OTEL_SERVICE_NAME` | `my-service` | value of `APP_NAME` | OTel `service.name` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `collector:4317` | `localhost:4317` | OTLP/gRPC collector |
 | `OTEL_EXPORTER_OTLP_INSECURE` | `false` | `true` when `APP_ENV=dev`, else `false` | Plaintext OTLP |
-| `OTEL_TRACES_SAMPLER_RATIO` | `0.1` | `1.0` in dev, `0.1` otherwise | Sampling ratio `0.0`–`1.0` |
+| `OTEL_TRACES_SAMPLER_RATIO` | `0.1` | `1.0` in dev, `0.1` otherwise | Sampling ratio `0.0`–`1.0` (takes precedence) |
+| `OTEL_TRACES_SAMPLER_ARG` | `0.1` | — | OTel-spec fallback for the sampling ratio when `OTEL_TRACES_SAMPLER_RATIO` is unset |
 
 ---
 
@@ -725,6 +735,8 @@ make docker-up
 ```
 
 Trace flow: **app** → OTLP gRPC `localhost:4317` → **otel-collector** → **Tempo**. Prometheus scrapes the app on `:8080/metrics`. Grafana is at `localhost:3000`.
+
+**Logs:** the example server writes structured JSON to `LOG_FILE` (default `logs/app.log` in `.env-example`). **Promtail** ships that file into **Loki**. Set `LOG_FILE` in `.env`, run `make docker-up`, then `make run`, and generate traffic so `http_request` lines are emitted. In Grafana → **Explore** → **Loki**, try `{job="platform-gincommon"}` or `{service="platform-gincommon"}`.
 
 ---
 

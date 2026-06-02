@@ -529,7 +529,30 @@ func TestAuthZMiddleware_ContextWrongType(t *testing.T) {
 	}
 }
 
-func TestMetricsMiddleware_NilActiveRequests(t *testing.T) {
+func TestMetricsMiddleware_NilRequestsTotal_Skips(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := metrics.HttpRequestsTotal
+	metrics.HttpRequestsTotal = nil
+	defer func() { metrics.HttpRequestsTotal = saved }()
+
+	r := gin.New()
+	r.Use(middleware.MetricsMiddleware(nil))
+	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
+
+// TestMetricsMiddleware_NilActiveRequests_Skips verifies that niling HttpActiveRequests
+// (while HttpRequestsTotal remains set) triggers the combined sentinel and does not panic.
+// This covers the regression where HttpActiveRequests was used without its own nil guard.
+func TestMetricsMiddleware_NilActiveRequests_Skips(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	saved := metrics.HttpActiveRequests

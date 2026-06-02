@@ -23,6 +23,7 @@ E2E_SERVICE_NAME ?= e2e-test
 export APP_NAME APP_ENV APP_PORT GO SMOKE_BASE_URL
 export OTEL_SERVICE_NAME OTEL_EXPORTER_OTLP_ENDPOINT
 export OTEL_COLLECTOR_GRPC_PORT OTEL_COLLECTOR_HTTP_PORT LOKI_HTTP_PORT PROMETHEUS_HTTP_PORT GRAFANA_HTTP_PORT
+export LOG_FILE
 export PROMETHEUS_SCRAPE_TARGET TEST_SERVICE_NAME E2E_SERVICE_NAME
 
 # Test packages (exclude smoke — needs optional live server).
@@ -175,6 +176,7 @@ docker-down:
 clean:
 	rm -rf bin
 	rm -rf *.log
+	rm -f logs/*.log
 
 # -----------------------------
 # CI HELPERS
@@ -188,7 +190,7 @@ vulncheck:
 cover-check:
 	$(GO) test $(TEST_PKGS) -race -count=1 -timeout 120s -coverpkg=$(COVER_PKG_LIST) -coverprofile=coverage.out
 	@pct=$$($(GO) tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
-	 awk -v p="$$pct" 'BEGIN { if (p+0 < 95) { print "FAIL: " p "% is below 95%"; exit 1 } else { print "PASS: " p "%" } }'
+	 awk -v p="$$pct" 'BEGIN { if (p+0 < 98) { print "FAIL: " p "% is below 98%"; exit 1 } else { print "PASS: " p "%" } }'
 
 .PHONY: ci
 ci: fmt-check tidy vet lint test-ci cover-check build

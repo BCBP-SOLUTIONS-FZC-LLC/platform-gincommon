@@ -25,6 +25,14 @@ func TestNewDemoRBAC(t *testing.T) {
 	}
 }
 
+// TestNewRBAC_DeprecatedAlias covers the deprecated NewRBAC alias, which delegates to NewDemoRBAC.
+func TestNewRBAC_DeprecatedAlias(t *testing.T) {
+	auth := gincommon.NewRBAC() //nolint:staticcheck // intentionally exercising the deprecated alias for coverage
+	if auth == nil {
+		t.Fatal("NewRBAC() returned nil")
+	}
+}
+
 func TestTraceIDFromContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

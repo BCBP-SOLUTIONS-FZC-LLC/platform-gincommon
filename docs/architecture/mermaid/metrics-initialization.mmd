@@ -4,8 +4,8 @@ flowchart TD
     B -- no  --> C[normalize empty buildVersion → "unknown"]
     C --> D[initMetricsWithRegisterer\nwith prometheus.DefaultRegisterer]
     D --> E[build constLabels\nservice=serviceName\nversion=buildVersion]
-    E --> F[create HTTP collectors\nHttpRequestsTotal · HttpRequestDuration\nHttpRequestSizeBytes · HttpResponseSizeBytes\nHttpActiveRequests · HttpPanicTotal\nRateLimitedRequestsTotal · BuildInfo]
-    F --> G[initGRPCMetrics\nGrpcRequestsTotal · GrpcRequestDuration\nGrpcRequestSizeBytes · GrpcResponseSizeBytes\nGrpcInflight · GrpcRateLimitedRequestsTotal]
+    E --> F[create HTTP collectors\nHttpRequestsTotal · HttpRequestDuration\nHttpRequestSizeBytes · HttpResponseSizeBytes\nHttpActiveRequests · HttpPanicTotal\nRateLimitedRequestsTotal · HttpRequestTimeoutTotal · BuildInfo]
+    F --> G[initGRPCMetrics\nGrpcRequestsTotal · GrpcRequestDuration\nGrpcRequestSizeBytes · GrpcResponseSizeBytes\nGrpcInflight · GrpcRateLimitedRequestsTotal · GrpcPanicTotal]
     G --> H[reg.MustRegister all collectors]
     H --> I[BuildInfo.WithLabelValues.Set 1]
     I --> J([return — vars are non-nil])

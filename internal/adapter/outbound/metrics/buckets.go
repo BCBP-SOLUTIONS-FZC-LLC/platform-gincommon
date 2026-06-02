@@ -1,9 +1,10 @@
 package metrics
 
-// HTTPRequestDurationBuckets are histogram upper bounds in seconds, tuned for IAM-style
+// RequestDurationBuckets are histogram upper bounds in seconds, tuned for IAM-style
 // workloads: fast authn/authz and token checks (1–50ms), policy lookups (50–500ms),
 // occasional heavy paths (1–5s), with a 10s tail for timeouts.
-var HTTPRequestDurationBuckets = []float64{
+// Used by both HTTP and gRPC duration histograms.
+var RequestDurationBuckets = []float64{
 	0.001, // 1ms
 	0.002,
 	0.005,
@@ -24,9 +25,10 @@ var HTTPRequestDurationBuckets = []float64{
 	10,
 }
 
-// HTTPPayloadSizeBuckets are histogram upper bounds in bytes, tuned for IAM APIs:
+// PayloadSizeBuckets are histogram upper bounds in bytes, tuned for IAM APIs:
 // compact JSON (JWT claims, policy snippets, role lists) with headroom for bulk policy payloads.
-var HTTPPayloadSizeBuckets = []float64{
+// Used by both HTTP and gRPC payload size histograms.
+var PayloadSizeBuckets = []float64{
 	128,
 	256,
 	512,

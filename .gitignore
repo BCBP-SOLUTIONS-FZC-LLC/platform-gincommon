@@ -31,6 +31,10 @@ go.work.sum
 .env
 .env.local
 
+# Local log files shipped to Loki via Promtail.
+# The directory is auto-created at runtime (LOG_FILE), so ignore it entirely.
+logs/
+
 # Editor/IDE
 # .idea/
 # .vscode/

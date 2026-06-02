@@ -12,6 +12,7 @@ graph LR
         def_mw["pkg/gincommon.DefaultMiddlewares(cfg)"]
         rp["pkg/gincommon.RequirePermissionWithLogger\n(action, resource, auth, logger)"]
         grpc_mw["pkg/grpccommon.DefaultUnaryInterceptors(cfg)"]
+        shutdown["pkg/gincommon.Shutdown(logger)\nflush spans + logger.Sync()"]
     end
 
     main -->|"APP_ENV"| logger_new
@@ -26,3 +27,4 @@ graph LR
     rp -->|"gin.HandlerFunc"| routes
     main -->|"cfg{ServiceName}"| grpc_mw
     grpc_mw -->|"[]grpc.UnaryServerInterceptor"| main
+    main -->|"defer on SIGTERM"| shutdown

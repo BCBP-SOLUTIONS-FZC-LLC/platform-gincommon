@@ -20,12 +20,13 @@ graph LR
     end
 
     subgraph grpc_m["Prometheus metrics (gRPC)"]
-        g1["grpc_requests_total"]
-        g2["grpc_request_duration_seconds"]
-        g3["grpc_request_size_bytes"]
-        g4["grpc_response_size_bytes"]
-        g5["grpc_inflight"]
-        g6["grpc_rate_limited_requests_total"]
+        g1["grpc_server_handled_total\nlabels: method · grpc_code · status_class · error_class"]
+        g2["grpc_server_handling_seconds\nlabels: method · status_class · error_class"]
+        g3["grpc_server_request_size_bytes"]
+        g4["grpc_server_response_size_bytes"]
+        g5["grpc_server_inflight_requests\nlabels: method"]
+        g6["grpc_rate_limited_requests_total\nlabels: method"]
+        g7["grpc_panic_total\nlabels: method"]
     end
 
     subgraph otel["OpenTelemetry"]

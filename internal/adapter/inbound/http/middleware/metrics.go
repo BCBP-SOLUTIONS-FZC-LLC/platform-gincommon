@@ -17,7 +17,7 @@ import (
 // Pass a non-nil logger to emit a warn-level log entry for every 429 response.
 func MetricsMiddleware(logger port.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if metrics.HttpActiveRequests == nil {
+		if metrics.HttpRequestsTotal == nil || metrics.HttpActiveRequests == nil {
 			c.Next()
 			return
 		}
@@ -43,18 +43,17 @@ func MetricsMiddleware(logger port.Logger) gin.HandlerFunc {
 				code = http.StatusInternalServerError
 			}
 			statusClass := metrics.HTTPStatusClass(code)
-			errorClass, _ := metrics.RequestOutcome(code)
-			outcomeLabels := []string{method, route, statusClass, errorClass}
+			errorClass := metrics.RequestOutcome(code)
 
-			if panicked && metrics.HttpPanicTotal != nil {
+			if panicked {
 				metrics.HttpPanicTotal.WithLabelValues(method, route).Inc()
 			}
 
-			metrics.HttpRequestsTotal.WithLabelValues(outcomeLabels...).Inc()
-			metrics.HttpRequestDuration.WithLabelValues(outcomeLabels...).Observe(elapsed)
-			metrics.HttpRequestSizeBytes.WithLabelValues(outcomeLabels...).Observe(
+			metrics.HttpRequestsTotal.WithLabelValues(method, route, statusClass, errorClass).Inc()
+			metrics.HttpRequestDuration.WithLabelValues(method, route, statusClass, errorClass).Observe(elapsed)
+			metrics.HttpRequestSizeBytes.WithLabelValues(method, route, statusClass, errorClass).Observe(
 				metrics.RequestBodySize(c.Request.ContentLength))
-			metrics.HttpResponseSizeBytes.WithLabelValues(outcomeLabels...).Observe(
+			metrics.HttpResponseSizeBytes.WithLabelValues(method, route, statusClass, errorClass).Observe(
 				math.Max(0, float64(c.Writer.Size())))
 
 			if code == http.StatusTooManyRequests {

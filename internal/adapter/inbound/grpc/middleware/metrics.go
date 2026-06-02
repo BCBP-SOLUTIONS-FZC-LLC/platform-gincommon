@@ -22,7 +22,7 @@ func UnaryMetricsInterceptor() grpc.UnaryServerInterceptor {
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (resp any, err error) {
-		if metrics.GrpcInflight == nil {
+		if metrics.GrpcRequestsTotal == nil || metrics.GrpcInflight == nil {
 			return handler(ctx, req)
 		}
 		method := label.GRPCMethod(info.FullMethod)
@@ -56,7 +56,7 @@ func StreamMetricsInterceptor() grpc.StreamServerInterceptor {
 		info *grpc.StreamServerInfo,
 		handler grpc.StreamHandler,
 	) (err error) {
-		if metrics.GrpcInflight == nil {
+		if metrics.GrpcRequestsTotal == nil || metrics.GrpcInflight == nil {
 			return handler(srv, ss)
 		}
 		method := label.GRPCMethod(info.FullMethod)
@@ -93,7 +93,7 @@ func observeGRPC(method string, elapsed time.Duration, err error, reqSize, respS
 		metrics.RecordGRPCRateLimited(method)
 	}
 
-	errorClass, _ := metrics.GRPCRequestOutcome(code)
+	errorClass := metrics.GRPCRequestOutcome(code)
 	metrics.RecordGRPC(
 		method,
 		elapsed.Seconds(),

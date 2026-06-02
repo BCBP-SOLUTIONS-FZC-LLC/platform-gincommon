@@ -6,8 +6,8 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 )
 
-func TestHTTPRequestDurationBuckets_AreIAMTuned(t *testing.T) {
-	b := metrics.HTTPRequestDurationBuckets
+func TestRequestDurationBuckets_AreIAMTuned(t *testing.T) {
+	b := metrics.RequestDurationBuckets
 
 	if len(b) < 12 {
 		t.Fatalf("expected at least 12 buckets, got %d", len(b))
@@ -31,8 +31,8 @@ func TestHTTPRequestDurationBuckets_AreIAMTuned(t *testing.T) {
 	}
 }
 
-func TestHTTPPayloadSizeBuckets_AreIAMTuned(t *testing.T) {
-	b := metrics.HTTPPayloadSizeBuckets
+func TestPayloadSizeBuckets_AreIAMTuned(t *testing.T) {
+	b := metrics.PayloadSizeBuckets
 
 	if len(b) < 8 {
 		t.Fatalf("expected at least 8 buckets, got %d", len(b))

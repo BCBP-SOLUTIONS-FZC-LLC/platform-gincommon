@@ -11,20 +11,18 @@ func TestGRPCRequestOutcome(t *testing.T) {
 	tests := []struct {
 		code      codes.Code
 		wantClass string
-		wantError string
 	}{
-		{codes.OK, "success", "false"},
-		{codes.InvalidArgument, "client_error", "true"},
-		{codes.Unauthenticated, "client_error", "true"},
-		{codes.Internal, "server_error", "true"},
-		{codes.Unavailable, "server_error", "true"},
+		{codes.OK, "success"},
+		{codes.InvalidArgument, "client_error"},
+		{codes.Unauthenticated, "client_error"},
+		{codes.Internal, "server_error"},
+		{codes.Unavailable, "server_error"},
 	}
 
 	for _, tc := range tests {
-		ec, isErr := metrics.GRPCRequestOutcome(tc.code)
-		if ec != tc.wantClass || isErr != tc.wantError {
-			t.Errorf("GRPCRequestOutcome(%v) = (%q, %q), want (%q, %q)",
-				tc.code, ec, isErr, tc.wantClass, tc.wantError)
+		ec := metrics.GRPCRequestOutcome(tc.code)
+		if ec != tc.wantClass {
+			t.Errorf("GRPCRequestOutcome(%v) = %q, want %q", tc.code, ec, tc.wantClass)
 		}
 	}
 }
@@ -38,14 +36,5 @@ func TestGRPCStatusClass(t *testing.T) {
 	}
 	if metrics.GRPCStatusClass(codes.Internal) != "5xx" {
 		t.Fatalf("Internal = %q", metrics.GRPCStatusClass(codes.Internal))
-	}
-}
-
-func TestGRPCErrorClassAndIsError(t *testing.T) {
-	if metrics.GRPCErrorClass(codes.OK) != "success" {
-		t.Fatalf("GRPCErrorClass(OK) = %q", metrics.GRPCErrorClass(codes.OK))
-	}
-	if metrics.GRPCIsError(codes.OK) != "false" {
-		t.Fatalf("GRPCIsError(OK) = %q", metrics.GRPCIsError(codes.OK))
 	}
 }
