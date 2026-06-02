@@ -83,6 +83,36 @@ func TestOtelTraceSampleRatio_ExplicitOverride(t *testing.T) {
 	}
 }
 
+// The OTel-spec OTEL_TRACES_SAMPLER_ARG is honored when the library-specific
+// OTEL_TRACES_SAMPLER_RATIO is unset.
+func TestOtelTraceSampleRatio_StandardSamplerArgFallback(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("OTEL_TRACES_SAMPLER_RATIO", "")
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
+	if got := config.OtelTraceSampleRatio(); got != 0.25 {
+		t.Fatalf("OtelTraceSampleRatio() = %v, want 0.25 from OTEL_TRACES_SAMPLER_ARG", got)
+	}
+}
+
+// OTEL_TRACES_SAMPLER_RATIO takes precedence over the standard OTEL_TRACES_SAMPLER_ARG.
+func TestOtelTraceSampleRatio_RatioTakesPrecedenceOverArg(t *testing.T) {
+	t.Setenv("OTEL_TRACES_SAMPLER_RATIO", "0.9")
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
+	if got := config.OtelTraceSampleRatio(); got != 0.9 {
+		t.Fatalf("OtelTraceSampleRatio() = %v, want 0.9 (RATIO wins over ARG)", got)
+	}
+}
+
+// An invalid OTEL_TRACES_SAMPLER_ARG falls back to the env-based default.
+func TestOtelTraceSampleRatio_InvalidSamplerArgFallsBack(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("OTEL_TRACES_SAMPLER_RATIO", "")
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "nonsense")
+	if got := config.OtelTraceSampleRatio(); got != 0.1 {
+		t.Fatalf("OtelTraceSampleRatio() = %v, want 0.1 fallback for invalid ARG", got)
+	}
+}
+
 func TestOtelTraceSampleRatio_InvalidFallsBack(t *testing.T) {
 	t.Setenv("APP_ENV", "dev")
 	t.Setenv("OTEL_TRACES_SAMPLER_RATIO", "bad")

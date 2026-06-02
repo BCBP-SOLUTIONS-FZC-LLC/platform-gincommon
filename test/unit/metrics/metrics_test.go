@@ -21,6 +21,7 @@ func TestInit_RegistersCollectors(t *testing.T) {
 		metrics.HttpActiveRequests == nil ||
 		metrics.HttpPanicTotal == nil ||
 		metrics.RateLimitedRequestsTotal == nil ||
+		metrics.HttpRequestTimeoutTotal == nil ||
 		metrics.BuildInfo == nil ||
 		metrics.GrpcRequestsTotal == nil ||
 		metrics.GrpcRequestDuration == nil ||
@@ -98,6 +99,13 @@ func TestInitWithRegisterer_EmptyBuildVersion_UsesUnknown(t *testing.T) {
 }
 
 // ─── Coverage gap tests ────────────────────────────────────────────────────────
+
+func TestRecordHTTPTimeout_NilSafe(t *testing.T) {
+	saved := metrics.HttpRequestTimeoutTotal
+	metrics.HttpRequestTimeoutTotal = nil
+	defer func() { metrics.HttpRequestTimeoutTotal = saved }()
+	metrics.RecordHTTPTimeout("GET", "/slow") // must not panic when counter is nil
+}
 
 // ProtoMessageSize: typed-nil proto.Message must return 0, not panic.
 func TestProtoMessageSize_TypedNilReturnsZero(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 	"github.com/gin-gonic/gin"
 )
 
@@ -24,6 +26,7 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 		// If the context expired and the handler wrote nothing, emit a 503 so
 		// callers get an explicit timeout signal rather than a silent 200 body.
 		if ctx.Err() != nil && !c.Writer.Written() {
+			metrics.RecordHTTPTimeout(c.Request.Method, label.HTTPRoute(c))
 			writeJSONError(c, http.StatusServiceUnavailable, "request timeout")
 		}
 	}

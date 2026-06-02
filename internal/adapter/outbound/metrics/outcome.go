@@ -28,30 +28,30 @@ func GRPCStatusClass(code codes.Code) string {
 	}
 }
 
-// RequestOutcome maps an HTTP status to outcome labels for metrics.
-// error_class is one of: success, client_error, server_error.
-// is_error is "true" or "false".
-func RequestOutcome(statusCode int) (errorClass, isError string) {
+// RequestOutcome maps an HTTP status code to error_class: "success", "client_error", or
+// "server_error". 3xx is classified as "success" (same bucket as 2xx).
+func RequestOutcome(statusCode int) string {
 	switch {
 	case statusCode >= 200 && statusCode < 400:
-		return "success", "false"
+		return "success"
 	case statusCode >= 400 && statusCode < 500:
-		return "client_error", "true"
+		return "client_error"
 	default:
-		return "server_error", "true"
+		return "server_error"
 	}
 }
 
-// GRPCRequestOutcome maps a gRPC status code to outcome labels for metrics.
-func GRPCRequestOutcome(code codes.Code) (errorClass, isError string) {
+// GRPCRequestOutcome maps a gRPC status code to error_class: "success", "client_error",
+// or "server_error".
+func GRPCRequestOutcome(code codes.Code) string {
 	switch code {
 	case codes.OK:
-		return "success", "false"
+		return "success"
 	case codes.Canceled, codes.InvalidArgument, codes.NotFound, codes.AlreadyExists,
 		codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition,
 		codes.OutOfRange, codes.Aborted, codes.DeadlineExceeded, codes.ResourceExhausted:
-		return "client_error", "true"
+		return "client_error"
 	default:
-		return "server_error", "true"
+		return "server_error"
 	}
 }

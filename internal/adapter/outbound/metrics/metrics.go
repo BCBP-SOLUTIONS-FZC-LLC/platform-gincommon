@@ -22,6 +22,8 @@ var (
 	HttpPanicTotal *prometheus.CounterVec
 	// RateLimitedRequestsTotal counts HTTP 429 responses by method and route.
 	RateLimitedRequestsTotal *prometheus.CounterVec
+	// HttpRequestTimeoutTotal counts requests that hit the TimeoutMiddleware deadline.
+	HttpRequestTimeoutTotal *prometheus.CounterVec
 	// BuildInfo is a gauge set to 1 with service/version const labels.
 	BuildInfo *prometheus.GaugeVec
 
@@ -35,7 +37,7 @@ var (
 const defaultVersion = "unknown"
 
 // Init registers Prometheus collectors with const labels service and version.
-// It is idempotent via sync.Once: the first call wins. All reads of the package-level
+// It is idempotent via sync.Once: the first caller wins. All reads of the package-level
 // vars are safe after Init returns because sync.Once provides the required happens-before.
 // Empty buildVersion is stored as "unknown".
 func Init(serviceName, buildVersion string) {
@@ -74,22 +76,22 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 		"version": buildVersion,
 	}
 
+	httpOutcomeLabels := []string{"method", "route", "status_class", "error_class"}
+
 	HttpRequestsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name:        "http_requests_total",
-			Help:        "Total HTTP requests",
+			Help:        "Total HTTP requests by method, route template, status class (3xx counted as 2xx), and error class",
 			ConstLabels: constLabels,
 		},
-		[]string{"method", "route", "status_class", "error_class"},
+		httpOutcomeLabels,
 	)
-
-	httpOutcomeLabels := []string{"method", "route", "status_class", "error_class"}
 
 	HttpRequestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:        "http_request_duration_seconds",
-			Help:        "HTTP request duration",
-			Buckets:     HTTPRequestDurationBuckets,
+			Help:        "HTTP request latency in seconds by method, route template, status class, and error class",
+			Buckets:     RequestDurationBuckets,
 			ConstLabels: constLabels,
 		},
 		httpOutcomeLabels,
@@ -104,16 +106,12 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 		[]string{"method", "route"},
 	)
 
-	sizeOpts := prometheus.HistogramOpts{
-		Buckets:     HTTPPayloadSizeBuckets,
-		ConstLabels: constLabels,
-	}
 	HttpRequestSizeBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:        "http_request_size_bytes",
 			Help:        "HTTP request body size in bytes",
-			Buckets:     sizeOpts.Buckets,
-			ConstLabels: sizeOpts.ConstLabels,
+			Buckets:     PayloadSizeBuckets,
+			ConstLabels: constLabels,
 		},
 		httpOutcomeLabels,
 	)
@@ -122,8 +120,8 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 		prometheus.HistogramOpts{
 			Name:        "http_response_size_bytes",
 			Help:        "HTTP response body size in bytes",
-			Buckets:     sizeOpts.Buckets,
-			ConstLabels: sizeOpts.ConstLabels,
+			Buckets:     PayloadSizeBuckets,
+			ConstLabels: constLabels,
 		},
 		httpOutcomeLabels,
 	)
@@ -141,6 +139,15 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 		prometheus.CounterOpts{
 			Name:        "rate_limited_requests_total",
 			Help:        "Total HTTP requests rejected by rate limiting (429)",
+			ConstLabels: constLabels,
+		},
+		[]string{"method", "route"},
+	)
+
+	HttpRequestTimeoutTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name:        "http_request_timeout_total",
+			Help:        "Total HTTP requests that timed out before the handler responded",
 			ConstLabels: constLabels,
 		},
 		[]string{"method", "route"},
@@ -167,6 +174,7 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 		HttpActiveRequests,
 		HttpPanicTotal,
 		RateLimitedRequestsTotal,
+		HttpRequestTimeoutTotal,
 		GrpcRequestsTotal,
 		GrpcRequestDuration,
 		GrpcRequestSizeBytes,
@@ -178,24 +186,13 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 }
 
 // RequestBodySize returns the request body size in bytes for histogram observation.
-// Unknown or missing Content-Length is recorded as 0.
+// Both Content-Length: -1 (unknown/chunked transfer) and Content-Length: 0 (empty body)
+// return 0; streaming request sizes are not captured without body wrapping.
 func RequestBodySize(contentLength int64) float64 {
 	if contentLength > 0 {
 		return float64(contentLength)
 	}
 	return 0
-}
-
-// ErrorClass returns the error_class outcome label for an HTTP status code.
-func ErrorClass(statusCode int) string {
-	ec, _ := RequestOutcome(statusCode)
-	return ec
-}
-
-// HTTPIsError returns the is_error outcome label ("true" or "false") for an HTTP status code.
-func HTTPIsError(statusCode int) string {
-	_, isErr := RequestOutcome(statusCode)
-	return isErr
 }
 
 // RecordHTTPRateLimited increments rate_limited_requests_total for explicit rate-limit paths.
@@ -204,4 +201,12 @@ func RecordHTTPRateLimited(method, route string) {
 		return
 	}
 	RateLimitedRequestsTotal.WithLabelValues(method, route).Inc()
+}
+
+// RecordHTTPTimeout increments http_request_timeout_total when TimeoutMiddleware fires.
+func RecordHTTPTimeout(method, route string) {
+	if HttpRequestTimeoutTotal == nil {
+		return
+	}
+	HttpRequestTimeoutTotal.WithLabelValues(method, route).Inc()
 }

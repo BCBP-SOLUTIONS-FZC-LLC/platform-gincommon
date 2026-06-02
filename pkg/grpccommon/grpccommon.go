@@ -231,3 +231,25 @@ func RequestContextFromContext(ctx context.Context) (*domain.RequestContext, boo
 func RequestIDFromContext(ctx context.Context) string {
 	return mw.RequestIDFromContext(ctx)
 }
+
+// logSyncer is the optional Sync() error capability exposed by buffered loggers
+// (e.g. the Zap-backed port.Logger). Shutdown flushes it if implemented.
+type logSyncer interface {
+	Sync() error
+}
+
+// Shutdown performs graceful telemetry cleanup for a gRPC service. Call it from main()
+// during shutdown (e.g. on SIGTERM) AFTER grpc.Server.GracefulStop has returned:
+// it stops the active OpenTelemetry TracerProvider — flushing any buffered spans to the
+// collector — and, when logger implements Sync() error (the Zap logger does), flushes
+// buffered log entries. Passing a nil logger flushes tracing only.
+//
+// It returns the logger's Sync error (if any) so callers can surface flush failures;
+// the tracing provider is always flushed regardless of the logger result.
+func Shutdown(logger port.Logger) error {
+	otelsetup.Shutdown()
+	if s, ok := logger.(logSyncer); ok {
+		return s.Sync()
+	}
+	return nil
+}

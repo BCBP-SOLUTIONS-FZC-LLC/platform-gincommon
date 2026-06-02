@@ -2,6 +2,10 @@
 package logger
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -13,7 +17,34 @@ type ZapLogger struct {
 
 // NewLogger builds a ZapLogger. Development (console-friendly) config is used when env is
 // "dev", "development", or "local"; production JSON config is used for all other values.
+//
+// When LOG_FILE is set (e.g. logs/app.log for local Grafana/Loki via Promtail), structured
+// JSON is also written to that path while dev console output on stderr is preserved.
 func NewLogger(env string) (*ZapLogger, error) {
+	logFile := os.Getenv("LOG_FILE")
+	if logFile == "" {
+		return newLoggerFromConfig(env)
+	}
+
+	fileCore, err := newFileCore(logFile)
+	if err != nil {
+		return nil, err
+	}
+
+	consoleCore, err := newConsoleCore(env)
+	if err != nil {
+		return nil, err
+	}
+
+	log := zap.New(
+		zapcore.NewTee(fileCore, consoleCore),
+		zap.AddCaller(),
+		zap.AddStacktrace(zapcore.ErrorLevel),
+	)
+	return &ZapLogger{log: log}, nil
+}
+
+func newLoggerFromConfig(env string) (*ZapLogger, error) {
 	var cfg zap.Config
 	if isDevEnv(env) {
 		cfg = zap.NewDevelopmentConfig()
@@ -27,6 +58,48 @@ func NewLogger(env string) (*ZapLogger, error) {
 	}
 
 	return &ZapLogger{log: log}, nil
+}
+
+func newFileCore(logFile string) (zapcore.Core, error) {
+	dir := filepath.Dir(logFile)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+
+	encCfg := zap.NewProductionEncoderConfig()
+	encCfg.TimeKey = "ts"
+	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	return zapcore.NewCore(
+		zapcore.NewJSONEncoder(encCfg),
+		zapcore.AddSync(f),
+		zapcore.DebugLevel,
+	), nil
+}
+
+func newConsoleCore(env string) (zapcore.Core, error) {
+	if isDevEnv(env) {
+		cfg := zap.NewDevelopmentConfig()
+		return zapcore.NewCore(
+			zapcore.NewConsoleEncoder(cfg.EncoderConfig),
+			zapcore.AddSync(os.Stderr),
+			cfg.Level,
+		), nil
+	}
+
+	cfg := zap.NewProductionConfig()
+	return zapcore.NewCore(
+		zapcore.NewJSONEncoder(cfg.EncoderConfig),
+		zapcore.AddSync(os.Stderr),
+		cfg.Level,
+	), nil
 }
 
 // NewLoggerWithCore builds a ZapLogger for tests or custom zap cores.
@@ -102,7 +175,16 @@ func (l *ZapLogger) Error(msg string, fields map[string]interface{}) {
 // Sync flushes any buffered log entries. Call before process exit to avoid
 // dropping the last log lines when the OS terminates the process.
 func (l *ZapLogger) Sync() error {
-	return l.log.Sync()
+	err := l.log.Sync()
+	if err == nil {
+		return nil
+	}
+	// stderr sync often fails in tests and non-TTY environments; file sinks still flush.
+	msg := err.Error()
+	if strings.Contains(msg, "bad file descriptor") || strings.Contains(msg, "inappropriate ioctl") {
+		return nil
+	}
+	return err
 }
 
 // isDevEnv mirrors config.IsDevEnv without importing the config package.

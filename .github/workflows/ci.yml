@@ -35,7 +35,7 @@ jobs:
             go.sum
             go.mod
 
-      - name: Coverage (≥95% required)
+      - name: Coverage (≥98% required)
         run: |
           INTERNAL_PKG="github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/grpc/middleware"
           go test $(go list ./test/... | grep -v /test/smoke$) $INTERNAL_PKG \
@@ -44,7 +44,7 @@ jobs:
             -coverprofile=coverage.out
           pct=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
           echo "Total coverage: ${pct}%"
-          awk -v p="$pct" 'BEGIN { if (p+0 < 95) { print "FAIL: " p "% is below the 95% threshold"; exit 1 } }'
+          awk -v p="$pct" 'BEGIN { if (p+0 < 98) { print "FAIL: " p "% is below the 98% threshold"; exit 1 } }'
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4

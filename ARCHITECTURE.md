@@ -15,8 +15,8 @@ The library is organised in concentric Clean Architecture layers. Inner layers h
 ```mermaid
 graph TD
     subgraph pub["Public API  —  pkg/"]
-        gincommon_pkg["pkg/gincommon\nConfig · TracingOptions\nDefaultMiddlewares · ObservabilityMiddlewares\nProtectedMiddlewares\nRequirePermission · RequirePermissionWithLogger\nInitTracing · EnsureTracing · InitTracingFromEnv\nNewRBAC"]
-        grpccommon_pkg["pkg/grpccommon\nConfig\nDefaultUnaryInterceptors\nDefaultStreamInterceptors"]
+        gincommon_pkg["pkg/gincommon\nConfig · TracingOptions\nDefaultMiddlewares · ObservabilityMiddlewares\nProtectedMiddlewares · TimeoutMiddleware · HealthHandler\nRequirePermission · RequirePermissionWithLogger\nInitTracing · EnsureTracing · InitTracingFromEnv · Shutdown\nNewDemoRBAC"]
+        grpccommon_pkg["pkg/grpccommon\nConfig · TracingOptions\nObservability/Protected/Full Unary+Stream Interceptors\nDefaultUnaryInterceptors · DefaultStreamInterceptors\nRequirePermission · RequireStreamPermission · Shutdown\nNewDemoRBAC"]
         logger_pkg["pkg/logger\nNewLogger"]
     end
 
@@ -140,17 +140,21 @@ graph LR
 | `PropagateHeaders(c, req)` | Injects trace context, request ID, and identity headers from inbound Gin context into an outbound `*http.Request` |
 | `RequirePermission(action, resource, auth)` | Per-route RBAC middleware, no logging on denial |
 | `RequirePermissionWithLogger(action, resource, auth, logger)` | Per-route RBAC with audit log on denial and internal errors |
-| `NewRBAC()` | Returns reference `*RBACService` (demos and tests only — not for production IAM) |
+| `NewDemoRBAC()` | Returns reference `*RBACService` (demos and tests only — not for production IAM). `NewRBAC()` is a deprecated alias |
+| `RequestContext(c)` | Retrieves `*domain.RequestContext` from the Gin context; typed-nil safe |
+| `TraceIDFromContext(c)` / `RequestIDFromContext(c)` | Type-safe correlation-ID readers for Gin handler context |
 | `InitTracing(service, version, endpoint)` | Initialise OTLP/gRPC export; returns shutdown func |
 | `EnsureTracing(service, version, endpoint)` | Install TracerProvider only if no SDK provider is registered yet |
 | `EnsureInitTelemetry(service, version, cfg)` | Like `EnsureTracing` with full `TelemetryConfig` |
 | `InitTracingFromEnv()` | Read `OTEL_SERVICE_NAME`, `BUILD_VERSION`, `OTEL_EXPORTER_OTLP_ENDPOINT` then call `InitTracing` |
+| `Shutdown(logger)` | Graceful cleanup: flush OTel spans + `logger.Sync()`; call from `main()` after the HTTP server stops |
 
 ### pkg/grpccommon
 
 | Symbol | Description |
 |--------|-------------|
-| `Config` | `ServiceName` (required — panics if empty), `BuildVersion`, `Logger` for Prometheus labels, tracing scopes, and interceptor logging |
+| `Config` | `ServiceName` (required — panics if empty), `BuildVersion`, `Logger`, `Tracing *TracingOptions` for Prometheus labels, tracing scopes, and interceptor logging |
+| `TracingOptions` | Optional OTel overrides: `Endpoint`, `Insecure`, `SampleRatio`, `EnableBaggage` (mirrors `gincommon.TracingOptions`) |
 | `ObservabilityUnaryInterceptors(cfg)` | Returns `[PanicRecovery, RequestID, Tracing, Metrics, Logging]` for unary RPCs |
 | `ObservabilityStreamInterceptors(cfg)` | Returns `[PanicRecovery, RequestID, Tracing, Metrics, Logging]` for streaming RPCs |
 | `ProtectedUnaryInterceptors(cfg)` | Returns `[RequireAuth, ContextInterceptor]` — validates identity metadata |
@@ -161,8 +165,12 @@ graph LR
 | `DefaultStreamInterceptors(cfg)` | Alias for `ObservabilityStreamInterceptors` (backward compatible) |
 | `RequirePermission(action, resource, auth)` | Per-RPC RBAC unary interceptor; requires `ProtectedUnaryInterceptors` to have run |
 | `RequirePermissionWithLogger(action, resource, auth, logger)` | Like `RequirePermission` with audit logging on denial |
+| `RequireStreamPermission(action, resource, auth)` | Per-stream RBAC interceptor; requires `ProtectedStreamInterceptors` to have run |
+| `RequireStreamPermissionWithLogger(action, resource, auth, logger)` | Like `RequireStreamPermission` with audit logging on denial |
+| `NewDemoRBAC()` | Returns reference `*RBACService` (demos and tests only — not for production IAM) |
 | `RequestContextFromContext(ctx)` | Retrieves `*domain.RequestContext` from a gRPC handler context |
 | `RequestIDFromContext(ctx)` | Retrieves the correlation request ID from a gRPC handler context |
+| `Shutdown(logger)` | Graceful cleanup: flush OTel spans + `logger.Sync()`; call from `main()` after `GracefulStop` returns |
 
 ### pkg/logger
 
@@ -407,8 +415,8 @@ flowchart TD
     B -- no  --> C[normalize empty buildVersion → "unknown"]
     C --> D[initMetricsWithRegisterer<br/>with prometheus.DefaultRegisterer]
     D --> E[build constLabels<br/>service=serviceName<br/>version=buildVersion]
-    E --> F[create HTTP collectors<br/>HttpRequestsTotal · HttpRequestDuration<br/>HttpRequestSizeBytes · HttpResponseSizeBytes<br/>HttpActiveRequests · HttpPanicTotal<br/>RateLimitedRequestsTotal · BuildInfo]
-    F --> G[initGRPCMetrics<br/>GrpcRequestsTotal · GrpcRequestDuration<br/>GrpcRequestSizeBytes · GrpcResponseSizeBytes<br/>GrpcInflight · GrpcRateLimitedRequestsTotal]
+    E --> F[create HTTP collectors<br/>HttpRequestsTotal · HttpRequestDuration<br/>HttpRequestSizeBytes · HttpResponseSizeBytes<br/>HttpActiveRequests · HttpPanicTotal<br/>RateLimitedRequestsTotal · HttpRequestTimeoutTotal · BuildInfo]
+    F --> G[initGRPCMetrics<br/>GrpcRequestsTotal · GrpcRequestDuration<br/>GrpcRequestSizeBytes · GrpcResponseSizeBytes<br/>GrpcInflight · GrpcRateLimitedRequestsTotal · GrpcPanicTotal]
     G --> H[reg.MustRegister all collectors]
     H --> I[BuildInfo.WithLabelValues.Set 1]
     I --> J([return — vars are non-nil])
@@ -429,15 +437,19 @@ flowchart TD
 | `http_active_requests` | Gauge | route |
 | `http_panic_total` | Counter | method, route |
 | `rate_limited_requests_total` | Counter | method, route |
+| `http_request_timeout_total` | Counter | method, route |
 | `build_info` | Gauge (=1) | *(const: service, version)* |
-| `grpc_requests_total` | Counter | method, status, error_class |
-| `grpc_request_duration_seconds` | Histogram | method, status, error_class |
-| `grpc_request_size_bytes` | Histogram | method, status, error_class |
-| `grpc_response_size_bytes` | Histogram | method, status, error_class |
-| `grpc_inflight` | Gauge | method |
+| `grpc_server_handled_total` | Counter | method, grpc_code, status_class, error_class |
+| `grpc_server_handling_seconds` | Histogram | method, status_class, error_class |
+| `grpc_server_request_size_bytes` | Histogram | method, status_class, error_class |
+| `grpc_server_response_size_bytes` | Histogram | method, status_class, error_class |
+| `grpc_server_inflight_requests` | Gauge | method |
 | `grpc_rate_limited_requests_total` | Counter | method |
+| `grpc_panic_total` | Counter | method |
 
 All metrics carry const labels `service` and `version` set at initialisation time.
+
+> Note: `status_class` buckets 3xx into `2xx` (see `HTTPStatusClass`). `error_class` is one of `success`, `client_error`, `server_error`. The gRPC counter additionally exposes the raw `grpc_code` (e.g. `OK`, `InvalidArgument`, `Internal`).
 
 ---
 
@@ -448,7 +460,7 @@ All metrics carry const labels `service` and `version` set at initialisation tim
 1. `PanicRecovery` — recover panics; return `codes.Internal`; log with stack trace
 2. `RequestID` — read `x-request-id` from metadata or generate a UUID
 3. `Tracing` — extract W3C `traceparent`; start OTel server span; scoped to `cfg.ServiceName`
-4. `Metrics` — Prometheus `grpc_requests_total`, duration, sizes, inflight
+4. `Metrics` — Prometheus `grpc_server_handled_total`, duration, sizes, inflight
 5. `Logging` — structured `grpc_request` log: Info (OK), Warn (client errors), Error (server errors)
 6. `RequireAuth` — reject calls missing `x-user-id` or `x-tenant-id` with `codes.Unauthenticated`
 7. `ContextInterceptor` — build `domain.RequestContext`; store via `domain.ContextWithRequestContext`
@@ -480,7 +492,7 @@ sequenceDiagram
     Note over TR: extract traceparent<br/>start OTel server span (scope=ServiceName)
 
     TR ->>+ ME: next
-    Note over ME: record grpc_inflight +1<br/>defer: observe duration + sizes
+    Note over ME: record grpc_server_inflight_requests +1<br/>defer: observe duration + sizes
 
     ME ->>+ LO: next
     Note over LO: defer: structured grpc_request log<br/>after response
@@ -575,6 +587,7 @@ graph LR
         def_mw["pkg/gincommon.DefaultMiddlewares(cfg)"]
         rp["pkg/gincommon.RequirePermissionWithLogger<br/>(action, resource, auth, logger)"]
         grpc_mw["pkg/grpccommon.DefaultUnaryInterceptors(cfg)"]
+        shutdown["pkg/gincommon.Shutdown(logger)<br/>flush spans + logger.Sync()"]
     end
 
     main -->|"APP_ENV"| logger_new
@@ -589,6 +602,7 @@ graph LR
     rp -->|"gin.HandlerFunc"| routes
     main -->|"cfg{ServiceName}"| grpc_mw
     grpc_mw -->|"[]grpc.UnaryServerInterceptor"| main
+    main -->|"defer on SIGTERM"| shutdown
 ```
 
 **Consumer setup** (in the consuming service's `go.mod`):
@@ -619,8 +633,11 @@ r := gin.New()
 r.Use(gincommon.DefaultMiddlewares(cfg)...)
 
 // per-route RBAC
-auth := gincommon.NewRBAC()
+auth := gincommon.NewDemoRBAC()
 r.DELETE("/users/:id", gincommon.RequirePermissionWithLogger("delete", "users", auth, log))
+
+// graceful shutdown (after srv.Shutdown returns)
+defer gincommon.Shutdown(log)
 ```
 
 ---
@@ -770,7 +787,7 @@ Services that import this library must uphold the following contract. Violating 
 | `RequestContextFromGoContext` typed-nil safe | Returns `(nil, false)` for both absent and typed-nil pointer values — callers that check only `ok` before dereferencing cannot panic |
 | `clientIPFromContext` nil-Addr safe | gRPC context interceptor guards `p.Addr != nil` before calling `p.Addr.String()` — custom transports and `bufconn` that leave `Addr` unset do not panic |
 | gRPC logging fires on panic | `UnaryLoggingInterceptor` and `StreamLoggingInterceptor` use named returns + `defer` + panic sentinel so panicking handlers always emit a `grpc_request` log entry (as `codes.Internal`) |
-| gRPC metrics counted on panic | `UnaryMetricsInterceptor` and `StreamMetricsInterceptor` use `panicked`-sentinel defers — panicking handlers are recorded in `grpc_requests_total` (as `codes.Internal`) and `grpc_request_duration_seconds` |
+| gRPC metrics counted on panic | `UnaryMetricsInterceptor` and `StreamMetricsInterceptor` use `panicked`-sentinel defers — panicking handlers are recorded in `grpc_server_handled_total` (as `codes.Internal`) and `grpc_server_handling_seconds`, and increment `grpc_panic_total` |
 | gRPC spans record real panic value | `UnaryTracingInterceptor` and `StreamTracingInterceptor` use an inner `defer recover()+re-panic` to capture the actual panic value into `span.RecordError(fmt.Errorf("%v", panicValue))` before re-panicking so `UnaryPanicRecoveryInterceptor` still converts it to `codes.Internal` |
 | gRPC spans marked Error for all server errors | `UnaryTracingInterceptor` and `StreamTracingInterceptor` call `span.SetStatus(otelcodes.Error, err.Error())` for any non-nil handler error (not only panics) — per OTel spec `RecordError` alone does not change span status, so the explicit call is required for trace-based 5xx alerting |
 | gRPC `TraceID` populated in `RequestContext` | `injectRequestContext` reads the active OTel span via `trace.SpanFromContext(ctx).SpanContext()` after `UnaryTracingInterceptor` runs; `rc.TraceID` is the 32-hex trace ID when the span context is valid, empty string otherwise |

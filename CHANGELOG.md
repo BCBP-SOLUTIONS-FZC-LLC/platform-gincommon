@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pkg/gincommon`:** `Shutdown(logger port.Logger) error` — graceful telemetry cleanup for HTTP services. Stops the active OpenTelemetry `TracerProvider` (flushing buffered spans) and, when the logger implements `Sync() error`, flushes buffered log entries. Call from `main()` after the HTTP server stops accepting requests.
+- **`pkg/grpccommon`:** `Shutdown(logger port.Logger) error` — same graceful cleanup for gRPC services; call after `grpc.Server.GracefulStop` returns.
+- **`metrics`:** `http_request_timeout_total` counter (labels: `method`, `route`) and `RecordHTTPTimeout` helper — incremented by `TimeoutMiddleware` when the request deadline expires before the handler responds, so timeout-induced `503`s are distinguishable from other `5xx` responses.
+- **`config`:** `OtelTraceSampleRatio` now honors the OpenTelemetry-spec `OTEL_TRACES_SAMPLER_ARG` (used with `OTEL_TRACES_SAMPLER=traceidratio`) as a fallback when the library-specific `OTEL_TRACES_SAMPLER_RATIO` is unset.
+
+### Changed
+
+- **`metrics` (internal):** `RequestOutcome` and `GRPCRequestOutcome` now return a single `errorClass` string (the previously unused `isError` return was removed). HTTP metric `Help` text now documents the label set and the 3xx-as-2xx status-class rule. These packages are under `internal/` and are not importable by consuming services — no external API impact.
+- **`metrics` (internal):** Duration/payload bucket variables renamed `HTTPRequestDurationBuckets` → `RequestDurationBuckets` and `HTTPPayloadSizeBuckets` → `PayloadSizeBuckets` to reflect that both HTTP and gRPC histograms share them. Internal-only; no external impact.
+- **`http/middleware/metrics.go` + `grpc/middleware/metrics.go`:** Nil-collector sentinel now checks the primary counter (`HttpRequestsTotal` / `GrpcRequestsTotal`) and the in-flight gauge together, preventing a panic if a gauge is niled independently.
+
+### Removed
+
+- **`metrics` (internal):** Deleted the unused `ErrorClass`, `HTTPIsError`, `GRPCErrorClass`, and `GRPCIsError` helpers (they surfaced an `is_error` label that no collector used). Internal-only; no external API impact.
+
 ---
 
 ## [1.1.0] - 2026-05-29

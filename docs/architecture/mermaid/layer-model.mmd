@@ -1,7 +1,7 @@
 graph TD
     subgraph pub["Public API  —  pkg/"]
-        gincommon_pkg["pkg/gincommon\nConfig · TracingOptions\nDefaultMiddlewares · ObservabilityMiddlewares\nProtectedMiddlewares\nTimeoutMiddleware · HealthHandler · ErrorResponse\nPropagateHeaders\nRequirePermission · RequirePermissionWithLogger\nInitTracing · EnsureTracing · InitTracingFromEnv\nNewRBAC"]
-        grpccommon_pkg["pkg/grpccommon\nConfig{ServiceName,BuildVersion,Logger}\nObservabilityUnaryInterceptors · ObservabilityStreamInterceptors\nProtectedUnaryInterceptors · ProtectedStreamInterceptors\nFullUnaryInterceptors · FullStreamInterceptors\nDefaultUnaryInterceptors · DefaultStreamInterceptors\nRequirePermission · RequirePermissionWithLogger\nRequestContextFromContext · RequestIDFromContext"]
+        gincommon_pkg["pkg/gincommon\nConfig · TracingOptions\nDefaultMiddlewares · ObservabilityMiddlewares\nProtectedMiddlewares\nTimeoutMiddleware · HealthHandler · ErrorResponse\nPropagateHeaders\nRequirePermission · RequirePermissionWithLogger\nRequestContext · TraceIDFromContext · RequestIDFromContext\nInitTracing · EnsureTracing · InitTracingFromEnv · Shutdown\nNewDemoRBAC"]
+        grpccommon_pkg["pkg/grpccommon\nConfig{ServiceName,BuildVersion,Logger,Tracing} · TracingOptions\nObservabilityUnaryInterceptors · ObservabilityStreamInterceptors\nProtectedUnaryInterceptors · ProtectedStreamInterceptors\nFullUnaryInterceptors · FullStreamInterceptors\nDefaultUnaryInterceptors · DefaultStreamInterceptors\nRequirePermission · RequirePermissionWithLogger\nRequireStreamPermission · RequireStreamPermissionWithLogger\nRequestContextFromContext · RequestIDFromContext · Shutdown\nNewDemoRBAC"]
         logger_pkg["pkg/logger\nNewLogger"]
     end
 

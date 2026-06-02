@@ -71,21 +71,29 @@ func OtelEnableBaggage() bool {
 }
 
 // OtelTraceSampleRatio returns a value in [0,1] for trace ID ratio sampling (1 = always).
-// Defaults to 1.0 in dev, 0.1 in all other environments.
+// Precedence: OTEL_TRACES_SAMPLER_RATIO (this library's var, kept for backward compatibility),
+// then the OpenTelemetry-spec OTEL_TRACES_SAMPLER_ARG, then env-based defaults
+// (1.0 in dev, 0.1 in all other environments). Invalid or out-of-range values fall back
+// to the env-based default.
 func OtelTraceSampleRatio() float64 {
 	v := os.Getenv("OTEL_TRACES_SAMPLER_RATIO")
 	if v == "" {
-		if IsDevEnv(AppEnv()) {
-			return 1.0
-		}
-		return 0.1
+		// Fall back to the standard OTel sampler argument used with
+		// OTEL_TRACES_SAMPLER=traceidratio so services configured per the spec work.
+		v = os.Getenv("OTEL_TRACES_SAMPLER_ARG")
+	}
+
+	defaultRatio := 0.1
+	if IsDevEnv(AppEnv()) {
+		defaultRatio = 1.0
+	}
+
+	if v == "" {
+		return defaultRatio
 	}
 	n, err := strconv.ParseFloat(v, 64)
 	if err != nil || n < 0 || n > 1 {
-		if IsDevEnv(AppEnv()) {
-			return 1.0
-		}
-		return 0.1
+		return defaultRatio
 	}
 	return n
 }

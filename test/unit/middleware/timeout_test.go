@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 )
 
 func TestTimeoutMiddleware_SetsContextDeadline(t *testing.T) {
@@ -121,5 +124,89 @@ func TestTimeoutMiddleware_DeadlineWithinRange(t *testing.T) {
 	}
 	if deadline.After(after.Add(timeout + time.Second)) {
 		t.Fatalf("deadline %v too late; expected around %v", deadline, after.Add(timeout))
+	}
+}
+
+// TestTimeoutMiddleware_RecordsTimeoutCounter verifies that http_request_timeout_total
+// is incremented when the context deadline expires before the handler writes a response.
+func TestTimeoutMiddleware_RecordsTimeoutCounter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-timeout-counter", "test", reg)
+
+	r := gin.New()
+	r.Use(middleware.TimeoutMiddleware(1 * time.Nanosecond))
+	r.GET("/slow", func(c *gin.Context) {
+		<-c.Request.Context().Done()
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/slow", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+
+	counter, err := metrics.HttpRequestTimeoutTotal.GetMetricWithLabelValues(http.MethodGet, "/slow")
+	if err != nil {
+		t.Fatalf("get metric: %v", err)
+	}
+	if got := testutil.ToFloat64(counter); got != 1 {
+		t.Fatalf("http_request_timeout_total = %v, want 1", got)
+	}
+}
+
+// TestTimeoutMiddleware_NoTimeoutCounter_WhenHandlerResponds verifies that
+// http_request_timeout_total is NOT incremented when the handler responds normally.
+func TestTimeoutMiddleware_NoTimeoutCounter_WhenHandlerResponds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-timeout-ok", "test", reg)
+
+	r := gin.New()
+	r.Use(middleware.TimeoutMiddleware(10 * time.Second))
+	r.GET("/fast", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/fast", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	counter, err := metrics.HttpRequestTimeoutTotal.GetMetricWithLabelValues(http.MethodGet, "/fast")
+	if err != nil {
+		t.Fatalf("get metric: %v", err)
+	}
+	if got := testutil.ToFloat64(counter); got != 0 {
+		t.Fatalf("http_request_timeout_total = %v, want 0 for successful request", got)
+	}
+}
+
+// TestTimeoutMiddleware_NilSafe_TimeoutCounter verifies that a nil HttpRequestTimeoutTotal
+// does not panic when the timeout fires.
+func TestTimeoutMiddleware_NilSafe_TimeoutCounter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := metrics.HttpRequestTimeoutTotal
+	metrics.HttpRequestTimeoutTotal = nil
+	defer func() { metrics.HttpRequestTimeoutTotal = saved }()
+
+	r := gin.New()
+	r.Use(middleware.TimeoutMiddleware(1 * time.Nanosecond))
+	r.GET("/slow", func(c *gin.Context) {
+		<-c.Request.Context().Done()
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/slow", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
 	}
 }
