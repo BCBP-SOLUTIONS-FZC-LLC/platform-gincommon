@@ -412,7 +412,7 @@ flowchart TD
 flowchart TD
     A([metrics.Init called]) --> B{sync.Once<br/>already fired?}
     B -- yes --> Z([no-op — return])
-    B -- no  --> C[normalize empty buildVersion → "unknown"]
+    B -- no  --> C["normalize empty buildVersion -> unknown"]
     C --> D[initMetricsWithRegisterer<br/>with prometheus.DefaultRegisterer]
     D --> E[build constLabels<br/>service=serviceName<br/>version=buildVersion]
     E --> F[create HTTP collectors<br/>HttpRequestsTotal · HttpRequestDuration<br/>HttpRequestSizeBytes · HttpResponseSizeBytes<br/>HttpActiveRequests · HttpPanicTotal<br/>RateLimitedRequestsTotal · HttpRequestTimeoutTotal · BuildInfo]
