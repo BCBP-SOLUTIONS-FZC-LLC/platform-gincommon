@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-07-28
+
+### Fixed
+
+- **Security:** Bumped `go.mod`'s `go` directive to `1.26.5` and `google.golang.org/grpc` to `v1.82.1`, clearing 4 `govulncheck` findings: GO-2026-6061 (gRPC HTTP/2 transport & xDS RBAC authorization engine), GO-2026-5856 (`crypto/tls` Encrypted Client Hello privacy leak), GO-2026-5039 (`net/textproto` unescaped error inputs), and GO-2026-5037 (`crypto/x509` inefficient hostname parsing) — the latter three fixed in the Go 1.26.4/1.26.5 standard library.
+- **`Dockerfile`:** Builder base image bumped to `golang:1.26.5-alpine` (was `1.26.3-alpine`). The `go.mod` bump above raised the minimum required Go version, and `GOTOOLCHAIN=local` was rejecting `go mod download` under the older image.
+
+### Changed
+
+- **CI (`validate.yml`):** Split the single `validate` job into parallel `quality` (fmt/tidy/vet/lint/vulncheck) and `test` (race detector) jobs, shortening the gate's wall-clock time. `ci.yml`/`release.yml` gate on the reusable workflow as a whole and are unaffected.
+- **CI (`ci.yml`):** Added an `interop` job (Cross-language compatibility) calling `platform-interop-tests`'s reusable workflow after `build`, wired to the existing `GO_PRIVATE_TOKEN` secret.
+- **CI:** `actions/upload-artifact` bumped to `v5`.
+
+---
+
 ## [1.2.0] - 2026-06-03
 
 ### Added
