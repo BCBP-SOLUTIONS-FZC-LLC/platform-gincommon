@@ -1,10 +1,9 @@
 # Reusable validation workflow — called by ci.yml and release.yml.
-# Runs: checkout → Go setup → mod verify → fmt → tidy drift → vet → lint → vulncheck → race detector
-#
-# The "Race Detector" step is a mandatory blocking gate: it runs the full test
-# suite (unit + integration + e2e) with Go's -race flag. Any data race detected
-# fails this job, which blocks all downstream jobs (coverage, build, docker,
-# release). The step is intentionally named to be unambiguous in CI dashboards.
+# Runs two independent gates in parallel:
+#   quality — checkout → Go setup → mod verify → fmt → tidy drift → vet → lint → vulncheck
+#   test    — checkout → Go setup → race detector (unit + integration + e2e)
+# Both jobs must pass before any downstream job (coverage, build, docker,
+# release) can run — the calling workflow gates on this file as a whole.
 name: Validate
 
 "on":
@@ -23,8 +22,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  validate:
-    name: Validate
+  quality:
+    name: Quality
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -70,6 +69,23 @@ jobs:
         # Scope to library packages only — cmd/server is a demo binary and its
         # stdlib call graph (net/tls, html/template) produces noise, not library risk.
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./internal/... ./pkg/...
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
 
       # ── Mandatory gate ────────────────────────────────────────────────────
       # This step MUST pass before any downstream job (coverage, build, docker,
