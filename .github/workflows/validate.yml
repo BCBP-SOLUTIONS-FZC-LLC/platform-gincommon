@@ -1,5 +1,10 @@
 # Reusable validation workflow — called by ci.yml and release.yml.
-# Runs: checkout → Go setup → mod verify → fmt → tidy drift → vet → lint → vulncheck → test
+# Runs: checkout → Go setup → mod verify → fmt → tidy drift → vet → lint → vulncheck → race detector
+#
+# The "Race Detector" step is a mandatory blocking gate: it runs the full test
+# suite (unit + integration + e2e) with Go's -race flag. Any data race detected
+# fails this job, which blocks all downstream jobs (coverage, build, docker,
+# release). The step is intentionally named to be unambiguous in CI dashboards.
 name: Validate
 
 "on":
@@ -66,5 +71,9 @@ jobs:
         # stdlib call graph (net/tls, html/template) produces noise, not library risk.
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./internal/... ./pkg/...
 
-      - name: Test (race detector)
-        run: make test-ci
+      # ── Mandatory gate ────────────────────────────────────────────────────
+      # This step MUST pass before any downstream job (coverage, build, docker,
+      # release) can run. A data race detected here is a blocking failure.
+      # Do NOT remove -race or skip this step for a "faster" CI run.
+      - name: Race Detector — unit · integration · e2e
+        run: make race
