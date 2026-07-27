@@ -138,7 +138,7 @@ jobs:
       # platform-interop-tests/README.md for why).
       platform_gincommon_ref: ${{ github.head_ref || github.ref_name }}
     secrets:
-      # Requires a GH_PRIVATE_TOKEN secret (read access across all six libraries) — this repo
-      # doesn't define one today; add it (repo or org level) before this job can succeed. See
-      # interop.yml's `secrets.gh_private_token` description for the existing convention.
-      gh_private_token: ${{ secrets.GH_PRIVATE_TOKEN }}
+      # Requires a secret with read access across all six libraries. This org uses
+      # GO_PRIVATE_TOKEN (already defined) for that; interop.yml's own input is
+      # still named `gh_private_token` per its workflow_call contract.
+      gh_private_token: ${{ secrets.GO_PRIVATE_TOKEN }}
