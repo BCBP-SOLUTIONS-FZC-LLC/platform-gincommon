@@ -1,6 +1,6 @@
 module github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon
 
-go 1.26.3
+go 1.26.5
 
 require (
 	github.com/gin-gonic/gin v1.12.0
@@ -13,7 +13,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
 	go.uber.org/zap v1.28.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 )
 
