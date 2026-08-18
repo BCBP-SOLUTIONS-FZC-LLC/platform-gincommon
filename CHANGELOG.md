@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **deps:** Bumped `google.golang.org/grpc` `v1.82.1` → `v1.83.0` (transitively `go.opentelemetry.io/otel`/`otel/sdk`/`otel/trace`/`otel/metric`/`otlptracegrpc`/`otlptrace` `v1.43.0` → `v1.44.0` and `google.golang.org/genproto` to match). Internal dependency only; no `pkg/gincommon`/`pkg/grpccommon` API change.
+
 ---
 
 ## [1.3.0] - 2026-08-18
