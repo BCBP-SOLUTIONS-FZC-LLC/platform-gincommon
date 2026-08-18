@@ -451,6 +451,8 @@ All metrics carry const labels `service` and `version` set at initialisation tim
 
 > Note: `status_class` buckets 3xx into `2xx` (see `HTTPStatusClass`). `error_class` is one of `success`, `client_error`, `server_error`. The gRPC counter additionally exposes the raw `grpc_code` (e.g. `OK`, `InvalidArgument`, `Internal`).
 
+`pkg/gincommon.MetricsRegisterer()`/`MetricsConstLabels()` and their `pkg/grpccommon` equivalents expose the registerer and const labels above, so consuming services can register their own application collectors consistently instead of assuming `prometheus.DefaultRegisterer` and duplicating the labels.
+
 ---
 
 ## gRPC interceptor stack
@@ -757,6 +759,7 @@ Services that import this library must uphold the following contract. Violating 
 | **`BUILD_VERSION` is set in production builds** | Recorded in `build_info{version=...}`. Without it, all releases appear as `unknown` — canary deployments and rollback tracking by version are invisible. |
 | **`HealthHandler` is registered before `ProtectedMiddlewares`** | Load balancers and k8s liveness/readiness probes do not send identity headers. A protected health route causes 401 on every probe, triggering pod restarts. |
 | **`RequirePermission` is registered after `ProtectedMiddlewares`** | `AuthZMiddleware` reads `RequestContext` from the Gin/Go context. Registering it before `ContextMiddleware` runs returns `500 Internal Server Error` instead of `403 Forbidden`. |
+| **Custom metrics register via `MetricsRegisterer()`/`MetricsConstLabels()`, called after `Observability*`/`Full*`** | Metrics init is one-time and process-wide (`sync.Once`). Calling the accessors before any `Init` has run returns `prometheus.DefaultRegisterer` and empty const labels — a custom collector registered at that point silently diverges from gincommon's own metrics (e.g. in tests using an isolated `InitWithRegisterer` registry). |
 
 ---
 
@@ -767,6 +770,7 @@ Services that import this library must uphold the following contract. Violating 
 | Empty `ServiceName` → immediate panic | `ObservabilityMiddlewares` panics before any middleware is built — prevents invalid Prometheus label cardinality |
 | Unregistered routes use `"unknown"` label | `HTTPRoute` returns the `Unknown` constant when `c.FullPath()` is empty — never the raw URL path, which would create unbounded Prometheus cardinality from scanner probes and path-parameter abuse |
 | Idempotent Prometheus registration | `metrics.Init` is guarded by `sync.Once`; use `metrics.InitWithRegisterer` for isolated test registries; `InitWithRegisterer` is protected by an internal mutex against concurrent calls |
+| Shared process-wide metrics state across `pkg/gincommon`/`pkg/grpccommon` | `MetricsRegisterer()`/`MetricsConstLabels()` reflect whichever `Config` first triggered `metrics.Init` in the process — the same "first caller wins" `sync.Once` semantics as the collectors themselves, in either public package |
 | Tracing idempotency | `EnsureInitTelemetry` checks for an existing SDK `TracerProvider` before installing a new one; prevents duplicate providers when called multiple times |
 | OTLP export fallback | If the OTLP exporter dial fails, `initTracing` falls back to an in-process-only `TracerProvider` so spans still get valid trace IDs |
 | Correct OTel RPC attributes on gRPC spans | `splitFullMethod` strips all leading slashes then uses `strings.LastIndex` to split into `rpc.service` and `rpc.method`; bare method names (no slash) return `("", method)` so `rpc.method` is always correct; empty or slash-only input returns `("", "unknown")` so `rpc.method` is never an empty Prometheus label |

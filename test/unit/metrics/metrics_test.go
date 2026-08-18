@@ -98,6 +98,31 @@ func TestInitWithRegisterer_EmptyBuildVersion_UsesUnknown(t *testing.T) {
 	}
 }
 
+func TestRegisterer_ReflectsMostRecentInitWithRegisterer(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-registerer-accessor", "v3.0", reg)
+
+	if got := metrics.Registerer(); got != reg {
+		t.Fatalf("Registerer() = %v, want the registerer passed to InitWithRegisterer", got)
+	}
+}
+
+func TestConstLabels_ReflectsMostRecentInitWithRegisterer(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics.InitWithRegisterer("svc-labels-accessor", "v4.0", reg)
+
+	got := metrics.ConstLabels()
+	if got["service"] != "svc-labels-accessor" || got["version"] != "v4.0" {
+		t.Fatalf("ConstLabels() = %v, want service=svc-labels-accessor version=v4.0", got)
+	}
+
+	// Mutating the returned map must not affect the package's internal state.
+	got["service"] = "mutated"
+	if again := metrics.ConstLabels(); again["service"] != "svc-labels-accessor" {
+		t.Fatalf("ConstLabels() leaked internal state: got %v", again)
+	}
+}
+
 // ─── Coverage gap tests ────────────────────────────────────────────────────────
 
 func TestRecordHTTPTimeout_NilSafe(t *testing.T) {

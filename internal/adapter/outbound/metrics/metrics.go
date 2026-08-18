@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"maps"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -32,6 +33,11 @@ var (
 	// Init is protected by initOnce; InitWithRegisterer (test-only) uses this mutex
 	// to prevent a data race when called while other goroutines read the vars.
 	initMu sync.Mutex
+
+	// currentRegisterer and currentConstLabels record the registerer and const labels
+	// used by the most recent Init/InitWithRegisterer call, for Registerer/ConstLabels.
+	currentRegisterer  prometheus.Registerer
+	currentConstLabels prometheus.Labels
 )
 
 const defaultVersion = "unknown"
@@ -75,6 +81,8 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 		"service": serviceName,
 		"version": buildVersion,
 	}
+	currentRegisterer = reg
+	currentConstLabels = constLabels
 
 	httpOutcomeLabels := []string{"method", "route", "status_class", "error_class"}
 
@@ -183,6 +191,29 @@ func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.
 		GrpcRateLimitedRequestsTotal,
 		GrpcPanicTotal,
 	)
+}
+
+// Registerer returns the prometheus.Registerer collectors were registered to by the most
+// recent Init or InitWithRegisterer call. Returns prometheus.DefaultRegisterer if neither
+// has been called yet, matching the registerer Init would use.
+func Registerer() prometheus.Registerer {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if currentRegisterer == nil {
+		return prometheus.DefaultRegisterer
+	}
+	return currentRegisterer
+}
+
+// ConstLabels returns a copy of the {service, version} const labels applied to this
+// package's own collectors, so callers can apply matching labels to custom collectors.
+// Returns an empty map if Init/InitWithRegisterer has not been called yet.
+func ConstLabels() prometheus.Labels {
+	initMu.Lock()
+	defer initMu.Unlock()
+	out := make(prometheus.Labels, len(currentConstLabels))
+	maps.Copy(out, currentConstLabels)
+	return out
 }
 
 // RequestBodySize returns the request body size in bytes for histogram observation.

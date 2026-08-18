@@ -283,6 +283,28 @@ Most services should prefer `ObservabilityMiddlewares` globally + `ProtectedMidd
 
 ---
 
+## Registering custom application metrics
+
+`ObservabilityMiddlewares`/`ObservabilityUnaryInterceptors` (or their `Default*`/`Full*` equivalents) register gincommon's own HTTP/gRPC metrics with `{service, version}` const labels. To add your own business metrics consistently — same registry, same labels — use `MetricsRegisterer()`/`MetricsConstLabels()` instead of assuming `prometheus.DefaultRegisterer` and duplicating the labels yourself:
+
+```go
+r.Use(gincommon.ObservabilityMiddlewares(cfg)...) // metrics are initialized here
+
+itemsCreated := prometheus.NewCounterVec(
+    prometheus.CounterOpts{
+        Name:        "items_created_total",
+        Help:        "Total items created",
+        ConstLabels: gincommon.MetricsConstLabels(), // {service, version} — matches gincommon's own metrics
+    },
+    []string{"tenant"},
+)
+gincommon.MetricsRegisterer().MustRegister(itemsCreated)
+```
+
+Call this **after** the middleware/interceptor constructor has run (metrics initialization is one-time and process-wide, shared between `pkg/gincommon` and `pkg/grpccommon`). `pkg/grpccommon` exposes the identical pair, `grpccommon.MetricsRegisterer()`/`grpccommon.MetricsConstLabels()`.
+
+---
+
 ## gRPC — quick start
 
 Import only `pkg/grpccommon` from your service.
@@ -610,6 +632,8 @@ http.DefaultClient.Do(req)
 | `EnsureTracing(svc, ver, endpoint)` | Init only if no SDK provider registered yet |
 | `InitTracingFromEnv()` | Init from `OTEL_*` env vars |
 | `Shutdown(logger)` | Flush OTel spans + `logger.Sync()`; call from `main()` after server stops |
+| `MetricsRegisterer()` | `prometheus.Registerer` gincommon's own metrics use — register custom collectors here |
+| `MetricsConstLabels()` | Copy of the `{service, version}` const labels applied to gincommon's own metrics |
 
 ## Public API (`pkg/grpccommon`)
 
@@ -632,6 +656,8 @@ http.DefaultClient.Do(req)
 | `RequestContextFromContext(ctx)` | `*domain.RequestContext` from gRPC handler context |
 | `RequestIDFromContext(ctx)` | Correlation request ID from gRPC handler context |
 | `Shutdown(logger)` | Flush OTel spans + `logger.Sync()`; call after `GracefulStop` returns |
+| `MetricsRegisterer()` | `prometheus.Registerer` gincommon's own metrics use — register custom collectors here |
+| `MetricsConstLabels()` | Copy of the `{service, version}` const labels applied to gincommon's own metrics |
 
 ## Public API (`pkg/logger`)
 

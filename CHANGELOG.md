@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-08-18
+
+### Added
+
+- **`pkg/gincommon`:** `MetricsRegisterer() prometheus.Registerer` and `MetricsConstLabels() prometheus.Labels` — expose the registerer and `{service, version}` const labels gincommon's own HTTP metrics are registered with, so consuming services can register custom application collectors consistently (instead of guessing `prometheus.DefaultRegisterer` and duplicating the labels themselves). Call after `ObservabilityMiddlewares`/`DefaultMiddlewares` has run.
+- **`pkg/grpccommon`:** Same pair, `MetricsRegisterer()` and `MetricsConstLabels()`, for gRPC services. Metrics initialization is shared process-wide with `pkg/gincommon`.
+
+---
+
 ## [1.2.1] - 2026-07-28
 
 ### Fixed
