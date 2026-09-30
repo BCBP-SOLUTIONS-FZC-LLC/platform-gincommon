@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pkg/gincommon` tracing API** so consuming services never import OpenTelemetry: `NewTracer(scope)`, `NoopTracer()`, `Tracer`/`Span` type aliases, `SpanTraceID(ctx)`, `RecordSpanError(ctx, err, description)`, `InjectTraceContext(ctx, header)` (the `context.Context` counterpart of `PropagateHeaders`), and `NewSpanTracer(scope)` (a `StartSpan(ctx, name)` hook for platform-pgcommon's `Config.Tracer`). All of them use the TracerProvider and propagator `InitTracing` installs.
+- **`pkg/gincommon` metrics API** so consuming services never import the Prometheus client: `MetricsHandler()` (serves `MetricsRegisterer()`'s registry), `NewCounterVec`/`NewCounter`/`NewGaugeVec`/`NewGauge` (registered with the `{service, version}` const labels; `nil` registerer means `MetricsRegisterer()`), plus `Registerer`/`CounterVec`/`Counter`/`GaugeVec`/`Gauge` type aliases.
+- **`pkg/logger.Default()`**: a process-wide gincommon logger (built once for `APP_ENV`, then `ENVIRONMENT`, default production) for code paths that were never handed one.
+
 ---
 
 ## [1.3.0] - 2026-08-18

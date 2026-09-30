@@ -77,6 +77,9 @@ internal/
 - `RequirePermission(action, resource, auth)` — per-route RBAC, no logging
 - `RequirePermissionWithLogger(action, resource, auth, logger)` — per-route RBAC with audit log entries on denial
 - `InitTracing()`, `EnsureTracing()`, `InitTracingFromEnv()` — OpenTelemetry OTLP/gRPC setup
+- `NewTracer(scope)`, `NoopTracer()`, `Tracer`/`Span` aliases, `SpanTraceID(ctx)`, `RecordSpanError(ctx, err, desc)`, `InjectTraceContext(ctx, header)`, `NewSpanTracer(scope)` (a `StartSpan` hook, e.g. pgcommon's `Config.Tracer`) — tracing outside handlers, with no OpenTelemetry import in consumers
+- `MetricsHandler()`, `NewCounterVec`/`NewCounter`/`NewGaugeVec`/`NewGauge(reg, name, help, labels...)` plus type aliases — custom metrics on `MetricsRegisterer()` with `{service, version}` const labels, with no Prometheus import in consumers
+- `pkg/logger.Default()` — process-wide gincommon logger for code paths without an injected one
 
 **`pkg/grpccommon`** — for gRPC services:
 - `Config{ServiceName, BuildVersion, Logger}` — `ServiceName` required; `Logger` enables logging and panic recovery

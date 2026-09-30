@@ -303,6 +303,30 @@ gincommon.MetricsRegisterer().MustRegister(itemsCreated)
 
 Call this **after** the middleware/interceptor constructor has run (metrics initialization is one-time and process-wide, shared between `pkg/gincommon` and `pkg/grpccommon`). `pkg/grpccommon` exposes the identical pair, `grpccommon.MetricsRegisterer()`/`grpccommon.MetricsConstLabels()`.
 
+To avoid importing the Prometheus client at all, use the constructors instead. They register on `MetricsRegisterer()` (or the registerer you pass, e.g. an isolated registry in tests) with the `{service, version}` const labels. Then serve everything, gincommon's and yours, from one handler:
+
+```go
+itemsCreated, err := gincommon.NewCounterVec(nil, "items_created_total", "Total items created", "tenant")
+// also gincommon.NewCounter, NewGaugeVec, NewGauge
+itemsCreated.WithLabelValues(tenantID).Inc()
+
+metricsMux.Handle("/metrics", gincommon.MetricsHandler())
+```
+
+## Tracing and logging outside handlers
+
+`pkg/gincommon` covers what services need beyond the HTTP middleware, so they never import OpenTelemetry. Everything uses the TracerProvider and propagator that `InitTracing` installed:
+
+| API | Use |
+|---|---|
+| `NewTracer(scope) Tracer` / `NoopTracer()` | Start child spans (`tracer.Start(ctx, name)` → `Span`) in services, repositories and consumers |
+| `SpanTraceID(ctx)` | Trace ID from a `context.Context`, for log correlation. The `*gin.Context` form is `TraceIDFromContext` |
+| `RecordSpanError(ctx, err, description)` | Record an error on the current span and mark it failed |
+| `InjectTraceContext(ctx, header)` | W3C `traceparent` onto an outbound request without a `*gin.Context`. The `*gin.Context` form is `PropagateHeaders` |
+| `NewSpanTracer(scope)` | A `StartSpan(ctx, name) (ctx, end)` hook, e.g. `platform-pgcommon`'s `Config.Tracer` |
+
+`logger.Default()` (in `pkg/logger`) returns a process-wide gincommon logger for code paths that were never handed one, such as an early startup failure. It is built once, for `APP_ENV`, then `ENVIRONMENT`, defaulting to production.
+
 ---
 
 ## gRPC — quick start
