@@ -997,8 +997,8 @@ Boolean `OTEL_*` values are case-insensitive (`true`/`1`/`yes`, `false`/`0`/`no`
 | Artefact | Produced by | Consumers |
 |---|---|---|
 | Go module tag `vX.Y.Z` | pushed by a maintainer (triggers `release.yml`) | all consuming services (`go get ...@vX.Y.Z`, `GOPRIVATE`) |
-| `metricslint` binaries (linux/darwin amd64+arm64, windows amd64) + `.sha256` | `prepare-release-binary.sh` | non-Go CI |
-| `checksums.txt` | `create-github-release.sh` | release consumers |
+| `metricslint` binaries (linux/darwin amd64+arm64, windows amd64) + `.sha256` | `prepare-release-binary.sh` (`binaries` job) | non-Go CI |
+| `checksums.txt` + `checksums.txt.sigstore.json` (Cosign `sign-blob`) | `release-checksums.sh` + `publish` job | release consumers |
 | SBOM, SLSA provenance | `release.yml` | supply-chain audit |
 | Demo image, Cosign-signed — semver tags from `release.yml` (no `latest`); branch + `sha-` tags from `ci.yml` `push` | `release.yml`, `ci.yml` | CI smoke gate only |
 
@@ -1011,7 +1011,13 @@ Two-stage `Dockerfile`: digest-pinned `golang:1.26.6-alpine` builder; digest-pin
 - SemVer over `pkg/*` ([VERSIONING.md](../../VERSIONING.md)); `v1.4.0` is a recorded exception (breaking in a MINOR).
 - `verify-changelog-entry.sh`: a `## [X.Y.Z]` section must exist (fixed-string match).
 - `verify-release-tag.sh`: the tag points at HEAD (`git tag --points-at`) and is reachable from `origin/main`.
-- Trivy (CRITICAL/HIGH) runs inside `release.yml` after the git tag is pushed; it gates the image push and the GitHub Release, not the tag itself.
+- `release.yml` mirrors platform-pgcommon's:
+  1. `verify`: dispatch ref, tag on `main`, CHANGELOG section.
+  2. The `ci.yml` gates at the tag (Trivy CRITICAL/HIGH/UNKNOWN, smoke, interop), plus `binaries`.
+  3. `push`: the image is pushed only when its content fingerprint matches the image Trivy and smoke judged, checked both before and after the push.
+  4. `publish`: Cosign-signed `checksums.txt`.
+
+  The gates run after the git tag is pushed; they gate the image and the GitHub Release, not the tag itself. Floating image tags `X.Y`/`X` only move forward, and the demo image never gets `latest`.
 
 ---
 

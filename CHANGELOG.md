@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`release.yml` mirrors platform-pgcommon's pipeline:**
+  - **`verify` job first:** dispatch ref, tag on `main`, CHANGELOG section (an rc may use its base version's section), `SOURCE_DATE_EPOCH`, forward-only floating tags.
+  - **Same gates as `ci.yml` at the tag:** validate-test, validate-quality, build-image (Hadolint), trivy (CRITICAL/HIGH/UNKNOWN), smoke and interop, plus `binaries`.
+  - **`push` only when the image matches what was tested:** the image's content fingerprint must equal the one trivy and smoke recorded, checked both before and after the push.
+  - **`publish` signs `checksums.txt`:** Cosign `sign-blob`, shipped as `checksums.txt.sigstore.json`.
+  - **SLSA provenance** is read from the BuildKit image index instead of `cosign download attestation`.
+  - **Image tags:** `X.Y`/`X` only move forward; the demo image still never gets `latest`.
+  - New scripts `image-fingerprint.sh`, `release-image-tags.sh`, `release-checksums.sh` and `changelog-section.sh`; `verify-release-tag.sh`, `verify-changelog-entry.sh`, `extract-release-notes.sh`, `create-github-release.sh` and `export-image-provenance.sh` are aligned with platform-pgcommon.
+
 ## [1.4.0] - 2026-10-02
 
 > **Versioning:** this release is tagged **v1.4.0** although it contains breaking changes — a recorded exception to SemVer (see `VERSIONING.md` → *Recorded exceptions*). No consumer had been deployed, and every consuming service is upgraded in lockstep. Follow the *Upgrading to v1.4.0* checklist in `README.md`.

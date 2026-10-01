@@ -839,8 +839,8 @@ This is a Go module. A release is a **git tag** that consumers pin with `go get 
 | Artefact | Where | Purpose |
 |---|---|---|
 | Go module version | git tag `vX.Y.Z` | What consuming services pin |
-| `metricslint` binaries + `.sha256`, `checksums.txt` | GitHub Release assets | Run the observability checks in non-Go CI |
-| Demo image (semver tags, no `latest`) | GHCR, Cosign-signed, SBOM + SLSA provenance | CI smoke target only |
+| `metricslint` binaries + `.sha256`, `checksums.txt` + `checksums.txt.sigstore.json` (Cosign-signed) | GitHub Release assets | Run the observability checks in non-Go CI |
+| Demo image (`X.Y.Z`, forward-only `X.Y` / `X`, no `latest`) | GHCR, Cosign-signed, SBOM + SLSA provenance | CI smoke target only |
 
 ### Versioning
 
@@ -855,7 +855,47 @@ SemVer over `pkg/*` ([VERSIONING.md](VERSIONING.md)); history in [CHANGELOG.md](
 
 1. Rename `## [Unreleased]` to `## [X.Y.Z] - <date>` in `CHANGELOG.md` (`verify-changelog-entry.sh` fails the tag otherwise).
 2. Merge to `main` — `verify-release-tag.sh` requires the tag to point at HEAD and be reachable from `origin/main`.
-3. Tag `vX.Y.Z` and push; `release.yml` does the rest.
+3. Tag `vX.Y.Z` (or `vX.Y.Z-rc.N`, which uses the base version's CHANGELOG section) and push; `release.yml` does the rest.
+
+`release.yml` mirrors platform-pgcommon's and platform-events'. It runs in this order:
+
+1. **Verify.** Checks the tag and the CHANGELOG first. The tag must be reachable from `origin/main`, and a manual `workflow_dispatch` must be started from `main` or from the tag itself.
+2. **Gates.** Runs the same gates as `ci.yml` at the tag: tests, quality, Hadolint, Trivy, smoke and interop.
+3. **Binaries.** Cross-compiles `metricslint` for five platforms, with checksums.
+4. **Push.** Only after every gate passes does it push the demo image. It first proves, by content fingerprint, that this is the image Trivy scanned and smoke tested. It then signs the image (with SBOM and SLSA provenance) and signs `checksums.txt`.
+5. **Publish.** Creates the GitHub Release, with notes extracted from `CHANGELOG.md`.
+
+Image tags have no `v`. `X.Y.Z` is always set. `X.Y` and `X` are set only when the release is the newest stable version of that line, so a hotfix such as `v1.3.5` after `v1.4.0` does not move `1`. A pre-release gets only its own tag, and the demo image never gets `latest`.
+
+**Verifying a release** (needs [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) ≥ 2.4). A tag-triggered release is signed by `release.yml@refs/tags/<tag>`. A re-run dispatched from `main` is signed by `release.yml@refs/heads/main`, which the regular expression below also accepts.
+
+```bash
+TAG=v1.4.1   # the release to verify
+REPO=BCBP-SOLUTIONS-FZC-LLC/platform-gincommon
+IDENTITY="^https://github\.com/${REPO}/\.github/workflows/release\.yml@refs/(tags/${TAG}|heads/main)$"
+
+# metricslint: verify the signed checksums, then the binary against them
+gh release download "$TAG" -R "$REPO" -p checksums.txt -p checksums.txt.sigstore.json \
+  -p "metricslint_${TAG}_linux_amd64"
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum --check --ignore-missing checksums.txt   # macOS: shasum -a 256 -c --ignore-missing
+
+# Demo image (tag without the v)
+cosign verify --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "ghcr.io/bcbp-solutions-fzc-llc/platform-gincommon:${TAG#v}"
+```
+
+Each GitHub Release carries:
+- the five `metricslint` binaries: `metricslint_<tag>_{linux,darwin}_{amd64,arm64}` and `metricslint_<tag>_windows_amd64.exe`
+- `checksums.txt` and its Cosign bundle `checksums.txt.sigstore.json`
+- the demo image's SLSA provenance (`provenance.slsa.json`)
+- the demo image's CycloneDX SBOM (`sbom.cyclonedx.json`)
+
+The workflow itself verifies with the looser `refs/(tags/v.+|heads/main)`; pinning the exact tag, as above, is stricter.
 
 ---
 
@@ -867,7 +907,7 @@ Five workflow files; shell logic lives in `.github/scripts/` (shellcheck-clean);
 - **`validate-test.yml`** (reusable) — `go mod download/verify` → `make test-cover` (unit + integration + e2e, `-race`, `-coverpkg`) → `coverage-gate.sh` (**≥ 98%**) → upload coverage.
 - **`validate-quality.yml`** (reusable) — `go mod verify` → HTML-escaped-operator guard → `gofmt` → tidy drift → `go vet` → `golangci-lint config verify` + lint → `make metrics-lint` → `govulncheck` (library packages) → Dockerfile digest pins vs `.docker-digests`.
 - **`changelog-check.yml`** — PRs touching `internal/`, `pkg/`, `cmd/` or `go.mod` must update `CHANGELOG.md` (diffed from the merge base).
-- **`release.yml`** (`v*` tags or manual) — validate → build (tag + CHANGELOG gates, cross-compiled `metricslint`) → docker (Trivy before any tag push, SBOM, provenance, Cosign) → publish (release notes from CHANGELOG + assets).
+- **`release.yml`** (`v*` tags or manual) — same job graph as platform-pgcommon's: `verify` (dispatch ref, tag on `main`, CHANGELOG section, `SOURCE_DATE_EPOCH`, floating-tag selection) → the `ci.yml` gates at the tag (`validate-test` ∥ `validate-quality` ∥ `build-image` → `trivy`, `smoke`, `interop`) + `binaries` (metricslint ×5) → `push` (pre- and post-push image fingerprint must match the image trivy and smoke judged; Cosign sign + verify; SLSA provenance) → `publish` (re-verified checksums, Cosign `sign-blob` of `checksums.txt`, GitHub Release).
 
 **Required repository secret: `GO_PRIVATE_TOKEN`** — the interop job fetches sibling private modules with it.
 

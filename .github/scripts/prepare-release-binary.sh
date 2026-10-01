@@ -8,7 +8,8 @@
 # Produces for each platform, in the working directory:
 #   metricslint_{tag}_{os}_{arch}[.exe]
 #   metricslint_{tag}_{os}_{arch}[.exe].sha256
-# create-github-release.sh aggregates the .sha256 files into checksums.txt.
+# release-checksums.sh (publish job) re-verifies the .sha256 files and writes
+# the aggregate checksums.txt that release.yml Cosign-signs.
 set -euo pipefail
 
 : "${RELEASE_TAG:?RELEASE_TAG is required}"
