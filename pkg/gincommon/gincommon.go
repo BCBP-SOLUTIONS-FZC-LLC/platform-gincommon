@@ -26,6 +26,19 @@ type Config struct {
 	BuildVersion string
 	// Tracing overrides OTEL_* env when non-nil fields are set.
 	Tracing *TracingOptions
+	// Domain is the registry domain (iam, workflow, billing, ...) of the service.
+	// Required: empty uses OBSERVABILITY_DOMAIN, and ObservabilityMiddlewares
+	// panics when neither is set or the registry does not define the domain.
+	// It is the domain const label (with service and environment) on every
+	// gincommon collector and every NewCounterVec / NewShared* collector, per
+	// the Enterprise Platform Observability Standard.
+	Domain string
+	// Environment is the environment label (local, dev, test, staging, prod),
+	// trimmed and lowercased. Empty uses APP_ENV, then ENVIRONMENT, the
+	// precedence platform-events and platform-pgcommon use, so every library in
+	// the process labels the same environment. Required;
+	// ObservabilityMiddlewares panics on any other value (e.g. "production").
+	Environment string
 }
 
 // TracingOptions overrides OpenTelemetry settings for ObservabilityMiddlewares.
@@ -41,12 +54,19 @@ type TracingOptions struct {
 }
 
 // ObservabilityMiddlewares returns panic recovery, tracing, metrics, and logging (no auth).
-// It panics if cfg.ServiceName is empty, as an empty service name produces invalid Prometheus labels.
+// It panics if cfg.ServiceName is empty, as an empty service name produces invalid Prometheus labels,
+// and if the observability identity (Domain, Environment) is missing or rejected by the registry.
+// Like the rest of metrics initialization, the first call in the process wins.
 func ObservabilityMiddlewares(cfg Config) []gin.HandlerFunc {
 	if cfg.ServiceName == "" {
 		panic("gincommon.Config.ServiceName is required")
 	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
+	metrics.MustInitFromConfig(metrics.Options{
+		ServiceName:  cfg.ServiceName,
+		BuildVersion: cfg.BuildVersion,
+		Domain:       cfg.Domain,
+		Environment:  cfg.Environment,
+	})
 
 	version := cfg.BuildVersion
 	if version == "" {

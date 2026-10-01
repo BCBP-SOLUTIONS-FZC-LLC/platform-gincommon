@@ -3,9 +3,11 @@ package metrics_test
 import (
 	"testing"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
 )
 
 const (
@@ -33,7 +35,7 @@ func TestInit_RegistersCollectors(t *testing.T) {
 	}
 
 	// Init is once-only; a second call must not replace collectors.
-	metrics.Init("metrics-test-again", "ignored")
+	fixtures.InitMetrics("metrics-test-again", "ignored")
 	if metrics.HttpRequestsTotal == nil {
 		t.Fatal("expected collectors to remain after second Init")
 	}
@@ -48,17 +50,20 @@ func TestInit_ServiceConstLabelOnMetrics(t *testing.T) {
 	}
 
 	for _, mf := range mfs {
-		if mf.GetName() != "http_requests_total" {
+		if mf.GetName() != "platform_http_requests_total" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
 			got := constLabelsMap(m)
-			if got["service"] == testServiceName && got["version"] == testBuildVersion {
+			if got["service"] == testServiceName && got["domain"] == "iam" && got["environment"] == "test" {
+				if _, ok := got["version"]; ok {
+					t.Fatal("version must only be on platform_build_info, not on every series")
+				}
 				return
 			}
 		}
 	}
-	t.Fatalf(`expected service=%q version=%q on http_requests_total`, testServiceName, testBuildVersion)
+	t.Fatalf(`expected domain="iam" environment="test" service=%q on platform_http_requests_total`, testServiceName)
 }
 
 func constLabelsMap(m *dto.Metric) map[string]string {
@@ -74,7 +79,7 @@ func constLabelsMap(m *dto.Metric) map[string]string {
 
 func TestInitWithRegisterer_RegistersCollectors(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-registerer", "v2.0", reg)
+	fixtures.InitMetricsWithRegisterer("svc-registerer", "v2.0", reg)
 
 	mfs, err := reg.Gather()
 	if err != nil {
@@ -87,7 +92,7 @@ func TestInitWithRegisterer_RegistersCollectors(t *testing.T) {
 
 func TestInitWithRegisterer_EmptyBuildVersion_UsesUnknown(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-empty-ver", "", reg)
+	fixtures.InitMetricsWithRegisterer("svc-empty-ver", "", reg)
 
 	mfs, err := reg.Gather()
 	if err != nil {
@@ -100,7 +105,7 @@ func TestInitWithRegisterer_EmptyBuildVersion_UsesUnknown(t *testing.T) {
 
 func TestRegisterer_ReflectsMostRecentInitWithRegisterer(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-registerer-accessor", "v3.0", reg)
+	fixtures.InitMetricsWithRegisterer("svc-registerer-accessor", "v3.0", reg)
 
 	if got := metrics.Registerer(); got != reg {
 		t.Fatalf("Registerer() = %v, want the registerer passed to InitWithRegisterer", got)
@@ -109,11 +114,11 @@ func TestRegisterer_ReflectsMostRecentInitWithRegisterer(t *testing.T) {
 
 func TestConstLabels_ReflectsMostRecentInitWithRegisterer(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-labels-accessor", "v4.0", reg)
+	fixtures.InitMetricsWithRegisterer("svc-labels-accessor", "v4.0", reg)
 
 	got := metrics.ConstLabels()
-	if got["service"] != "svc-labels-accessor" || got["version"] != "v4.0" {
-		t.Fatalf("ConstLabels() = %v, want service=svc-labels-accessor version=v4.0", got)
+	if got["service"] != "svc-labels-accessor" || got["domain"] != "iam" || got["environment"] != "test" || len(got) != 3 {
+		t.Fatalf("ConstLabels() = %v, want exactly domain=iam environment=test service=svc-labels-accessor", got)
 	}
 
 	// Mutating the returned map must not affect the package's internal state.

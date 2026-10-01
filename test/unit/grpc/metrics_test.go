@@ -5,13 +5,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/grpccommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
 )
 
 func TestMetricsRegisterer_DelegatesToInternalMetrics(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("grpccommon-metrics-registerer", "v1.0", reg)
+	fixtures.InitMetricsWithRegisterer("grpccommon-metrics-registerer", "v1.0", reg)
 
 	if got := grpccommon.MetricsRegisterer(); got != reg {
 		t.Fatalf("MetricsRegisterer() = %v, want %v", got, reg)
@@ -20,10 +20,10 @@ func TestMetricsRegisterer_DelegatesToInternalMetrics(t *testing.T) {
 
 func TestMetricsConstLabels_DelegatesToInternalMetrics(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("grpccommon-metrics-labels", "v2.0", reg)
+	fixtures.InitMetricsWithRegisterer("grpccommon-metrics-labels", "v2.0", reg)
 
 	got := grpccommon.MetricsConstLabels()
-	if got["service"] != "grpccommon-metrics-labels" || got["version"] != "v2.0" {
-		t.Fatalf("MetricsConstLabels() = %v, want service=grpccommon-metrics-labels version=v2.0", got)
+	if got["service"] != "grpccommon-metrics-labels" || got["domain"] != "iam" || got["environment"] != "test" || got["version"] != "" {
+		t.Fatalf("MetricsConstLabels() = %v, want domain=iam environment=test service=grpccommon-metrics-labels and no version", got)
 	}
 }

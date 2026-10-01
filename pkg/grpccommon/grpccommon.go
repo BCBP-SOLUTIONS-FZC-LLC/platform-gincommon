@@ -19,13 +19,29 @@ import (
 type Config struct {
 	// ServiceName is required for Prometheus const labels (panics if empty in Full* functions).
 	ServiceName string
-	// BuildVersion is the Prometheus version label; empty becomes "unknown".
+	// BuildVersion is the Prometheus version label; empty uses BUILD_VERSION env, then "unknown".
 	BuildVersion string
 	// Logger is used by logging and panic recovery interceptors; nil disables logging.
 	Logger port.Logger
 	// Tracing overrides OTEL_* env vars when non-nil fields are set.
 	// If nil, values are read from environment variables.
 	Tracing *TracingOptions
+	// Domain and Environment are the required observability identity, exactly
+	// as in gincommon.Config: Domain (else OBSERVABILITY_DOMAIN) and Environment
+	// (else APP_ENV, then ENVIRONMENT) become the domain/environment const
+	// labels; the interceptor constructors panic when they are missing or
+	// rejected by the registry.
+	Domain      string
+	Environment string
+}
+
+func initMetrics(cfg Config) {
+	metrics.MustInitFromConfig(metrics.Options{
+		ServiceName:  cfg.ServiceName,
+		BuildVersion: cfg.BuildVersion,
+		Domain:       cfg.Domain,
+		Environment:  cfg.Environment,
+	})
 }
 
 // TracingOptions overrides OpenTelemetry settings for gRPC observability interceptors.
@@ -73,7 +89,7 @@ func ObservabilityUnaryInterceptors(cfg Config) []grpc.UnaryServerInterceptor {
 	if cfg.ServiceName == "" {
 		panic("grpccommon.Config.ServiceName is required")
 	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
+	initMetrics(cfg)
 	version := cfg.BuildVersion
 	if version == "" {
 		version = config.BuildVersion()
@@ -94,7 +110,7 @@ func ObservabilityStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor 
 	if cfg.ServiceName == "" {
 		panic("grpccommon.Config.ServiceName is required")
 	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
+	initMetrics(cfg)
 	version := cfg.BuildVersion
 	if version == "" {
 		version = config.BuildVersion()
@@ -139,7 +155,7 @@ func FullUnaryInterceptors(cfg Config) []grpc.UnaryServerInterceptor {
 	if cfg.ServiceName == "" {
 		panic("grpccommon.Config.ServiceName is required")
 	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
+	initMetrics(cfg)
 	version := cfg.BuildVersion
 	if version == "" {
 		version = config.BuildVersion()
@@ -166,7 +182,7 @@ func FullStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor {
 	if cfg.ServiceName == "" {
 		panic("grpccommon.Config.ServiceName is required")
 	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
+	initMetrics(cfg)
 	version := cfg.BuildVersion
 	if version == "" {
 		version = config.BuildVersion()

@@ -47,7 +47,7 @@ This library **standardises** these concerns once so every service gets:
 | **Panic recovery** | `PanicRecoveryMiddleware` — JSON 500 + metric | `UnaryPanicRecoveryInterceptor` — `codes.Internal` |
 | **Request ID** | Valid client `x-request-id` values are preserved and echoed; missing or invalid values are replaced with a generated UUID. | Reads from metadata or generates UUID; stored in Go context |
 | **Tracing** | OTel HTTP server spans; tracer scope = `ServiceName` | OTel gRPC server spans; W3C `traceparent` in metadata |
-| **Metrics** | Prometheus HTTP `http_*` + `build_info` | Prometheus gRPC `grpc_server_*` |
+| **Metrics** | Prometheus `platform_http_*` + `platform_build_info` (requires `Config.Domain`) | Prometheus `platform_grpc_*` (requires `Config.Domain`) |
 | **Logging** | Structured `http_request` Zap log (Info/Warn/Error by status; `duration_ms` float64) | Structured `grpc_request` log (Info/Warn/Error by gRPC code) |
 | **Auth** | `RequireAuth` — `401` without `x-user-id` / `x-tenant-id` | `UnaryRequireAuthInterceptor` — `codes.Unauthenticated` |
 | **Tenant context** | `RequestContext{TenantID,UserID,Roles,TraceID,ClientIP}` in Gin context | Same struct in Go context via `domain.ContextWithRequestContext` |
@@ -283,35 +283,32 @@ Most services should prefer `ObservabilityMiddlewares` globally + `ProtectedMidd
 
 ---
 
-## Registering custom application metrics
+## Metrics and the Enterprise Platform Observability Standard
 
-`ObservabilityMiddlewares`/`ObservabilityUnaryInterceptors` (or their `Default*`/`Full*` equivalents) register gincommon's own HTTP/gRPC metrics with `{service, version}` const labels. To add your own business metrics consistently — same registry, same labels — use `MetricsRegisterer()`/`MetricsConstLabels()` instead of assuming `prometheus.DefaultRegisterer` and duplicating the labels yourself:
+gincommon implements the [Enterprise Platform Observability Standard](docs/observability/README.md). It emits `platform_http_*`, `platform_grpc_*` and `platform_build_info`, with `domain`, `service` and `environment` injected centrally on every collector (`version` only on `platform_build_info`).
+
+- **`Config.Domain` (or `OBSERVABILITY_DOMAIN`) is required.** The constructors panic at startup without one, or on a domain or environment the [registry](docs/observability/metric-registry.md) does not define.
+- **The pre-standard `http_*`/`grpc_*`/`build_info` names were removed with no compatibility period**, because nothing had been deployed. The [name mapping](docs/observability/migration.md) lists each replacement.
 
 ```go
+cfg := gincommon.Config{ServiceName: "event-consumer", BuildVersion: version, Domain: "iam", Logger: log}
 r.Use(gincommon.ObservabilityMiddlewares(cfg)...) // metrics are initialized here
 
-itemsCreated := prometheus.NewCounterVec(
-    prometheus.CounterOpts{
-        Name:        "items_created_total",
-        Help:        "Total items created",
-        ConstLabels: gincommon.MetricsConstLabels(), // {service, version} — matches gincommon's own metrics
-    },
-    []string{"tenant"},
-)
-gincommon.MetricsRegisterer().MustRegister(itemsCreated)
-```
+// Tier 1/2: shared metrics come from the registry (name, help, labels, buckets).
+processed, err := gincommon.NewSharedCounterVec(nil, "platform_messages_processed_total")
+processed.WithLabelValues("iam.events", "user.created").Inc()
 
-Call this **after** the middleware/interceptor constructor has run (metrics initialization is one-time and process-wide, shared between `pkg/gincommon` and `pkg/grpccommon`). `pkg/grpccommon` exposes the identical pair, `grpccommon.MetricsRegisterer()`/`grpccommon.MetricsConstLabels()`.
-
-To avoid importing the Prometheus client at all, use the constructors instead. They register on `MetricsRegisterer()` (or the registerer you pass, e.g. an isolated registry in tests) with the `{service, version}` const labels. Then serve everything, gincommon's and yours, from one handler:
-
-```go
-itemsCreated, err := gincommon.NewCounterVec(nil, "items_created_total", "Total items created", "tenant")
-// also gincommon.NewCounter, NewGaugeVec, NewGauge
-itemsCreated.WithLabelValues(tenantID).Inc()
+// Tier 3: service-specific metrics must be named <domain>_<service>_*; suffixes,
+// prohibited labels (tenant_id, user_id, ...) and the namespace are checked.
+hmac, err := gincommon.NewCounterVec(nil, "iam_event_consumer_hmac_failures_total", "HMAC failures", "reason")
+// also NewCounter, NewGaugeVec, NewGauge, NewHistogramVec, NewSharedGaugeVec, NewSharedHistogramVec
 
 metricsMux.Handle("/metrics", gincommon.MetricsHandler())
 ```
+
+Call these **after** the middleware/interceptor constructor has run. Metrics initialization is one-time and process-wide, shared between `pkg/gincommon` and `pkg/grpccommon`. Collectors you build yourself should register on `MetricsRegisterer()` with `MetricsConstLabels()`. Libraries that register their own collectors should get `LabeledRegisterer(nil)`.
+
+Enforce the standard in a service's CI with `pkg/obsregistry.Validate(gincommon.MetricsGatherer(), obsregistry.Options{})` in a test, and with `go run .../cmd/metricslint refs <dashboards/rules/manifests>`. See [CI enforcement](docs/observability/README.md#ci-enforcement).
 
 ## Tracing and logging outside handlers
 
@@ -639,7 +636,7 @@ http.DefaultClient.Do(req)
 
 | Symbol | Purpose |
 |--------|---------|
-| `Config{Logger, ServiceName, BuildVersion, Tracing}` | Middleware stack config. `ServiceName` is required (panics if empty). |
+| `Config{Logger, ServiceName, BuildVersion, Tracing, Domain, Environment}` | Middleware stack config. `ServiceName` and `Domain` (or `OBSERVABILITY_DOMAIN`) are required (panic if missing). `Environment` defaults to `APP_ENV`, then `ENVIRONMENT` (the platform-events/pgcommon precedence); values outside `local, dev, test, staging, prod` panic. `BuildVersion` defaults to `BUILD_VERSION`. |
 | `ObservabilityMiddlewares(cfg)` | `[PanicRecovery, RequestID, Tracing, CorrelationHeaders, Metrics, Logging]` |
 | `ProtectedMiddlewares(cfg)` | `[RequireAuth, ContextMiddleware]` |
 | `DefaultMiddlewares(cfg)` | Observability + Protected |
@@ -657,13 +654,27 @@ http.DefaultClient.Do(req)
 | `InitTracingFromEnv()` | Init from `OTEL_*` env vars |
 | `Shutdown(logger)` | Flush OTel spans + `logger.Sync()`; call from `main()` after server stops |
 | `MetricsRegisterer()` | `prometheus.Registerer` gincommon's own metrics use — register custom collectors here |
-| `MetricsConstLabels()` | Copy of the `{service, version}` const labels applied to gincommon's own metrics |
+| `MetricsConstLabels()` | Copy of the const labels: `{domain, environment, service}` with `Config.Domain`, else `{service, version}` |
+| `MetricsHandler()` / `MetricsGatherer()` | Serve / gather everything on `MetricsRegisterer()` |
+| `NewSharedCounterVec` / `NewSharedGaugeVec` / `NewSharedHistogramVec(reg, name)` | Tier 1/2 metrics built from their Platform Observability Registry entry |
+| `NewCounterVec` / `NewCounter` / `NewGaugeVec` / `NewGauge` / `NewHistogramVec` | Tier 3 service-specific metrics, validated against the standard |
+| `LabeledRegisterer(reg)` | Registerer adding `MetricsConstLabels()` to third-party collectors |
+
+## Public API (`pkg/obsregistry`)
+
+| Symbol | Purpose |
+|--------|---------|
+| `Default()` / `Parse(data)` | The embedded Platform Observability Registry / a registry document |
+| `Validate(gatherer, opts)` / `ValidateText(r, opts)` | Check emitted metrics: namespace, naming, suffixes, required labels, registry, label vocabulary, cardinality |
+| `ServicePrefix(domain, service)` | The `<domain>_<service>_` prefix of Tier 3 metrics |
+
+`cmd/metricslint` (`check`, `refs`, `registry`, `inventory`) runs the same checks from the command line.
 
 ## Public API (`pkg/grpccommon`)
 
 | Symbol | Purpose |
 |--------|---------|
-| `Config{ServiceName, BuildVersion, Logger, Tracing}` | `ServiceName` required. `Logger` enables logging and panic recovery logs. `Tracing *TracingOptions` overrides `OTEL_*` env. |
+| `Config{ServiceName, BuildVersion, Logger, Tracing, Domain, Environment}` | `ServiceName` and `Domain` required. `Logger` enables logging and panic recovery logs. `Tracing *TracingOptions` overrides `OTEL_*` env. `Domain`/`Environment` as in `gincommon.Config`. |
 | `ObservabilityUnaryInterceptors(cfg)` | `[PanicRecovery, RequestID, Tracing, Metrics, Logging]` |
 | `ObservabilityStreamInterceptors(cfg)` | Same for streaming RPCs |
 | `ProtectedUnaryInterceptors(cfg)` | `[RequireAuth, ContextInterceptor]` |
@@ -681,7 +692,7 @@ http.DefaultClient.Do(req)
 | `RequestIDFromContext(ctx)` | Correlation request ID from gRPC handler context |
 | `Shutdown(logger)` | Flush OTel spans + `logger.Sync()`; call after `GracefulStop` returns |
 | `MetricsRegisterer()` | `prometheus.Registerer` gincommon's own metrics use — register custom collectors here |
-| `MetricsConstLabels()` | Copy of the `{service, version}` const labels applied to gincommon's own metrics |
+| `MetricsConstLabels()` | Copy of the const labels applied to gincommon's own metrics (see `gincommon.MetricsConstLabels`) |
 
 ## Public API (`pkg/logger`)
 
@@ -759,14 +770,22 @@ make tidy
 | `make test-int` | Integration tests |
 | `make test-e2e` | E2E tests |
 | `make test-smoke` | Smoke tests (in-process + optional live server) |
-| `make race` | All tests with `-race` |
+| `make test-smoke-image` | CI's image smoke gate locally (builds the demo image; needs docker + GNU `timeout`) |
+| `make race` / `make test-ci` | All tests with `-race` |
+| `make test-cover` | One `-race` run that also writes `coverage.out` |
 | `make lint` | golangci-lint |
-| `make cover` | Coverage report (`coverage.out` + HTML); ≥95% required |
+| `make vuln-check` | govulncheck on `internal/` + `pkg/` (alias `vulncheck`) |
+| `make cover` | Coverage report (`coverage.out` + HTML) |
+| `make cover-check` | Coverage run + ≥98% gate |
 | `make cover-func` | Per-function coverage summary |
-| `make build` | Build example binary to `bin/platform-gincommon` |
+| `make build` | `bin/platform-gincommon` (demo) + `bin/metricslint`; verifies library packages compile |
 | `make run` | Run example server (`cmd/server`) |
 | `make docker-up` | Start local observability stack |
-| `make ci` | `tidy` + `vet` + `lint` + `test-ci` + `build` |
+| `make metrics-lint` | Observability standard: registry, rule refs, promtool, inventory drift |
+| `make pin-base-images` | Pin Dockerfile base images and record them in `.docker-digests` |
+| `make install-hooks` | Install `.githooks/pre-commit` |
+| `make ci` | `fmt-check` + `tidy` + `vet` + `lint` + `metrics-lint` + `cover-check` + `build` |
+| `make help` | Every target, grouped |
 
 ### Example server (optional)
 

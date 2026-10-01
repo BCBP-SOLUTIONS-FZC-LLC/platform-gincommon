@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/config"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
@@ -19,6 +18,8 @@ func NewRouter(log port.Logger, serviceName string) *gin.Engine {
 	// Consumers behind a trusted proxy should call r.SetTrustedProxies with their proxy CIDRs.
 	_ = r.SetTrustedProxies(nil)
 
+	// Domain/Environment come from OBSERVABILITY_DOMAIN / APP_ENV, so the demo
+	// emits platform_* metrics when OBSERVABILITY_DOMAIN is set in .env.
 	cfg := gincommon.Config{
 		Logger:       log,
 		ServiceName:  serviceName,
@@ -31,7 +32,7 @@ func NewRouter(log port.Logger, serviceName string) *gin.Engine {
 	public := r.Group("/")
 	{
 		public.GET("/health", healthHandler)
-		public.GET("/metrics", metricsHandler)
+		public.GET("/metrics", gin.WrapH(gincommon.MetricsHandler()))
 		if config.AppEnv() == "dev" {
 			public.GET("/panic", panicHandler)
 		}
@@ -42,10 +43,6 @@ func NewRouter(log port.Logger, serviceName string) *gin.Engine {
 
 func healthHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
-func metricsHandler(c *gin.Context) {
-	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 }
 
 func panicHandler(c *gin.Context) {

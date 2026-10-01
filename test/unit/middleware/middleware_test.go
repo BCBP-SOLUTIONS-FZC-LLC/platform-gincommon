@@ -18,6 +18,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
@@ -25,8 +28,6 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type errAuthorizer struct{}
@@ -121,7 +122,7 @@ func TestLoggingMiddleware_LogsRequestFields(t *testing.T) {
 
 func TestPanicRecoveryMiddleware_RecordsPanicAndReturns500(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-panic", "test")
+	fixtures.InitMetrics("svc-panic", "test")
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()
@@ -351,7 +352,7 @@ func TestTracingMiddleware_SetsSpanAttributesOnPanic(t *testing.T) {
 
 func TestMetricsMiddleware_RecordsRateLimitedOn429(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-rl", "test")
+	fixtures.InitMetrics("svc-rl", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -378,7 +379,7 @@ func TestMetricsMiddleware_RecordsRateLimitedOn429(t *testing.T) {
 
 func TestMetricsMiddleware_KnownRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-metrics", "test")
+	fixtures.InitMetrics("svc-metrics", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -395,7 +396,7 @@ func TestMetricsMiddleware_KnownRoute(t *testing.T) {
 
 func TestMetricsMiddleware_RecordsPayloadSizes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-size", "test")
+	fixtures.InitMetrics("svc-size", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -418,7 +419,7 @@ func TestMetricsMiddleware_RecordsPayloadSizes(t *testing.T) {
 
 func TestMetricsMiddleware_NoBodyResponseSizeNonNegative(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-nobody", "test")
+	fixtures.InitMetrics("svc-nobody", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -463,7 +464,7 @@ func TestMetricsMiddleware_NilSafe_WithoutInit(t *testing.T) {
 
 func TestMetricsMiddleware_UnknownRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-unknown", "test")
+	fixtures.InitMetrics("svc-unknown", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -890,7 +891,7 @@ func TestMetricsMiddleware_AbortWithNoStatus_NotRecordedAs5xx(t *testing.T) {
 	// inflating error budgets. After the fix only panics use code=500.
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-abort-test", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-abort-test", "test", reg)
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -922,7 +923,7 @@ func TestMetricsMiddleware_Panic_RecordedAs5xx(t *testing.T) {
 	// Confirms panicking handlers are counted in http_requests_total as 5xx.
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-panic-test", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-panic-test", "test", reg)
 
 	r := gin.New()
 	r.Use(
@@ -1011,7 +1012,7 @@ func TestAuthZMiddleware_NilAuth_Returns500(t *testing.T) {
 func TestMetricsMiddleware_429_WithLogger_LogsWarn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-429-logger", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-429-logger", "test", reg)
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()
@@ -1087,7 +1088,7 @@ func TestAuthZMiddleware_ContextWrongType_WithLogger(t *testing.T) {
 func TestLoggingMiddleware_PanicEmitsErrorLog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-log-panic", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-log-panic", "test", reg)
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()

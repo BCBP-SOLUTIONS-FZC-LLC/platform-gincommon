@@ -5,7 +5,7 @@ import "google.golang.org/grpc/codes"
 // HTTPStatusClass maps an HTTP status code to 2xx, 4xx, or 5xx (3xx counts as 2xx).
 func HTTPStatusClass(statusCode int) string {
 	switch {
-	case statusCode >= 200 && statusCode < 400:
+	case statusCode >= 100 && statusCode < 400:
 		return "2xx"
 	case statusCode >= 400 && statusCode < 500:
 		return "4xx"
@@ -32,7 +32,7 @@ func GRPCStatusClass(code codes.Code) string {
 // "server_error". 3xx is classified as "success" (same bucket as 2xx).
 func RequestOutcome(statusCode int) string {
 	switch {
-	case statusCode >= 200 && statusCode < 400:
+	case statusCode >= 100 && statusCode < 400:
 		return "success"
 	case statusCode >= 400 && statusCode < 500:
 		return "client_error"

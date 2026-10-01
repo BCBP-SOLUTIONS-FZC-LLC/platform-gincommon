@@ -74,7 +74,7 @@ func TestNewRouter_MetricsWithoutAuth(t *testing.T) {
 func TestNewRouter_Panic_Returns500WithCorrelation(t *testing.T) {
 	t.Setenv("APP_ENV", "dev")
 	gin.SetMode(gin.TestMode)
-	metrics.Init("server-panic-test", "test")
+	fixtures.InitMetrics("server-panic-test", "test")
 
 	log, err := logger.NewLogger("dev")
 	if err != nil {

@@ -18,8 +18,8 @@ func MetricsRegisterer() prometheus.Registerer {
 	return metrics.Registerer()
 }
 
-// MetricsConstLabels returns a copy of the {service, version} const labels applied to
-// gincommon's own metrics, so custom collectors can carry matching labels. Returns an
+// MetricsConstLabels returns a copy of the {domain, environment, service} const
+// labels every gincommon collector carries, so custom collectors can match them. Returns an
 // empty map if metrics have not been initialized yet.
 func MetricsConstLabels() prometheus.Labels {
 	return metrics.ConstLabels()

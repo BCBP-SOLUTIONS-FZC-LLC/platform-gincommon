@@ -1,0 +1,110 @@
+# Reusable workflow — quality gate.
+# workflow hygiene · fmt · tidy · vet · lint · observability standard ·
+# vuln-check · Dockerfile digest pins (+ .docker-digests record).
+# Called by ci.yml and release.yml. Must pass before push/release; does NOT
+# gate trivy or smoke (those only need validate-test.yml).
+name: Validate / Quality
+
+"on":
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to check out (leave empty to use the caller ref)'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Verify modules
+        run: go mod verify
+
+      # Workflow files must use literal operators, not HTML entity encodings.
+      - name: Reject HTML-escaped operators in workflow files
+        run: |
+          if grep -REn '&(gt|lt|amp);' .github/workflows/ .github/scripts/; then
+            echo "::error::Workflow or script files contain HTML entities. Use literal operators instead."
+            exit 1
+          fi
+
+      - name: Format check
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "${unformatted}" ]; then
+            echo "${unformatted}" | while IFS= read -r f; do
+              echo "::error file=${f},title=Format check::Not formatted — run 'make fmt'"
+            done
+            exit 1
+          fi
+
+      - name: Tidy check
+        run: |
+          make tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error file=go.mod,title=Module drift::go.mod or go.sum is stale — run 'go mod tidy' and commit the result."
+            exit 1
+          fi
+
+      - name: Vet
+        run: make vet
+
+      - name: Lint
+        run: make lint
+
+      # Enterprise Platform Observability Standard. This library owns the
+      # central Platform Observability Registry, so its governance is checked
+      # here: the registry self-check (tiers, namespaces, _total/_seconds
+      # suffixes, label vocabulary, ratification fields, legacy successors),
+      # the reference rules referencing registered platform_* names only,
+      # promtool check + unit tests of those rules (prom/prometheus image), and
+      # docs/observability/metric-registry.md drift. Emitted-metric compliance
+      # runs in validate-test (test/unit/platformmetrics).
+      - name: Observability standard
+        run: |
+          if ! make metrics-lint; then
+            echo "::error file=internal/obsregistry/registry.json,title=Observability standard::make metrics-lint failed — run it locally (make metrics-inventory regenerates the inventory)."
+            exit 1
+          fi
+
+      # Library packages only — cmd/server is a demo binary.
+      - name: Vulnerability check
+        run: |
+          if ! make vuln-check; then
+            echo "::error file=go.mod,title=Vulnerability found::govulncheck detected vulnerabilities — run 'make vuln-check' locally to view details."
+            exit 1
+          fi
+
+      # Floating tags (golang:1.26.6-alpine without @sha256:...) can be
+      # overwritten upstream, breaking supply-chain guarantees. The digests must
+      # also match the checked-in provenance record .docker-digests.
+      # Run `make pin-base-images` (requires docker) to update both.
+      - name: Dockerfile base image digest check
+        run: bash .github/scripts/check-docker-digests.sh

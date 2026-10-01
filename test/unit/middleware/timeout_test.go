@@ -12,6 +12,7 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
 )
 
 func TestTimeoutMiddleware_SetsContextDeadline(t *testing.T) {
@@ -132,7 +133,7 @@ func TestTimeoutMiddleware_DeadlineWithinRange(t *testing.T) {
 func TestTimeoutMiddleware_RecordsTimeoutCounter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-timeout-counter", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-timeout-counter", "test", reg)
 
 	r := gin.New()
 	r.Use(middleware.TimeoutMiddleware(1 * time.Nanosecond))
@@ -162,7 +163,7 @@ func TestTimeoutMiddleware_RecordsTimeoutCounter(t *testing.T) {
 func TestTimeoutMiddleware_NoTimeoutCounter_WhenHandlerResponds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-timeout-ok", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-timeout-ok", "test", reg)
 
 	r := gin.New()
 	r.Use(middleware.TimeoutMiddleware(10 * time.Second))

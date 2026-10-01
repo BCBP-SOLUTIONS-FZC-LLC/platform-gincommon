@@ -13,11 +13,12 @@ import (
 
 // MetricsMiddleware records Prometheus HTTP metrics (duration, sizes, panics, 429).
 // A single deferred closure covers both normal and panic paths so that panicking
-// requests are counted in http_requests_total (as 5xx) and not only in http_panic_total.
+// requests are counted in http_requests_total / platform_http_requests_total (as 5xx),
+// not only in the panic counters.
 // Pass a non-nil logger to emit a warn-level log entry for every 429 response.
 func MetricsMiddleware(logger port.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if metrics.HttpRequestsTotal == nil || metrics.HttpActiveRequests == nil {
+		if !metrics.HTTPEnabled() {
 			c.Next()
 			return
 		}
@@ -25,12 +26,12 @@ func MetricsMiddleware(logger port.Logger) gin.HandlerFunc {
 		method := c.Request.Method
 		route := label.HTTPRoute(c)
 
-		metrics.HttpActiveRequests.WithLabelValues(route).Inc()
+		metrics.HTTPActiveInc(route)
 		start := time.Now()
 		panicked := true // set to false on normal return; remains true if c.Next() panics
 
 		defer func() {
-			metrics.HttpActiveRequests.WithLabelValues(route).Dec()
+			metrics.HTTPActiveDec(route)
 
 			elapsed := time.Since(start).Seconds()
 			code := c.Writer.Status()
@@ -46,15 +47,11 @@ func MetricsMiddleware(logger port.Logger) gin.HandlerFunc {
 			errorClass := metrics.RequestOutcome(code)
 
 			if panicked {
-				metrics.HttpPanicTotal.WithLabelValues(method, route).Inc()
+				metrics.RecordHTTPPanic(method, route)
 			}
 
-			metrics.HttpRequestsTotal.WithLabelValues(method, route, statusClass, errorClass).Inc()
-			metrics.HttpRequestDuration.WithLabelValues(method, route, statusClass, errorClass).Observe(elapsed)
-			metrics.HttpRequestSizeBytes.WithLabelValues(method, route, statusClass, errorClass).Observe(
-				metrics.RequestBodySize(c.Request.ContentLength))
-			metrics.HttpResponseSizeBytes.WithLabelValues(method, route, statusClass, errorClass).Observe(
-				math.Max(0, float64(c.Writer.Size())))
+			metrics.RecordHTTP(method, route, statusClass, errorClass, elapsed,
+				metrics.RequestBodySize(c.Request.ContentLength), math.Max(0, float64(c.Writer.Size())))
 
 			if code == http.StatusTooManyRequests {
 				metrics.RecordHTTPRateLimited(method, route)

@@ -30,6 +30,17 @@ func IsDevEnv(env string) bool {
 	return env == "dev" || env == "development" || env == "local"
 }
 
+// ObservabilityDomain returns OBSERVABILITY_DOMAIN, the registry domain (e.g. iam)
+// used for the platform_* metrics' domain label when Config.Domain is empty.
+func ObservabilityDomain() string { return os.Getenv("OBSERVABILITY_DOMAIN") }
+
+// ObservabilityEnvironment returns the environment label source when
+// Config.Environment is empty: APP_ENV, then ENVIRONMENT. platform-events and
+// platform-pgcommon resolve their metrics identity with the same precedence.
+func ObservabilityEnvironment() string {
+	return getenv("APP_ENV", os.Getenv("ENVIRONMENT"))
+}
+
 // AppPort returns APP_PORT (default 8080).
 func AppPort() int { return getenvInt("APP_PORT", 8080) }
 

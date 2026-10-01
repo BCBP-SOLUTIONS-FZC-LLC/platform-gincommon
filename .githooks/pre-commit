@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Local commit gates: tidy, formatting, lint, and the Enterprise Platform
+# Observability Standard's fast checks (registry self-check, reference-rule
+# metric names, metric-registry.md inventory drift). The promtool rule checks
+# need docker and run in CI (validate-quality.yml → make metrics-lint).
+# Install with `make install-hooks` (also run by `make setup`).
+set -euo pipefail
+
+echo "[pre-commit] running tidy..."
+make tidy
+
+echo "[pre-commit] running fmt-check..."
+make fmt-check
+
+echo "[pre-commit] running lint..."
+make lint
+
+echo "[pre-commit] checking observability registry and inventory..."
+make metrics-registry metrics-refs
+if ! go run ./cmd/metricslint inventory | diff -q docs/observability/metric-registry.md - >/dev/null; then
+  echo "[pre-commit] docs/observability/metric-registry.md is stale — run 'make metrics-inventory' and stage it" >&2
+  exit 1
+fi

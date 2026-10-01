@@ -13,7 +13,8 @@ See [`ARCHITECTURE.md`](../ARCHITECTURE.md) for detailed flow diagrams and invar
 ## Common Commands
 
 ```bash
-make setup        # Copy .env-example → .env (run once before anything else)
+make setup        # Copy .env-example → .env and install git hooks (run once before anything else)
+make install-hooks # Install .githooks/pre-commit (tidy, fmt-check, lint, observability registry + inventory drift)
 make tidy         # go mod tidy
 make fmt          # go fmt ./...
 make vet          # go vet ./...
@@ -24,12 +25,20 @@ make test-unit    # Unit tests only
 make test-int     # Integration tests only
 make test-e2e     # E2E tests only
 make test-smoke   # Smoke tests (requires live server at SMOKE_BASE_URL)
-make race         # All tests with -race flag
+make race         # Alias for test-ci (all tests with -race)
+make test-smoke-image # CI image smoke gate locally (docker + GNU timeout)
+make vuln-check   # govulncheck internal/ + pkg/ (alias: vulncheck)
+make mod-verify   # go mod verify
+make godoc        # pkgsite at http://localhost:8080
 make build        # Compile to bin/platform-gincommon
 make run          # Run the example reference server
 make cover        # Coverage HTML report (measures ./internal/... ./pkg/... ./cmd/...)
 make cover-func   # Coverage summary by function (terminal)
-make ci           # tidy + vet + lint + test-ci + build (full CI pipeline)
+make ci           # fmt-check + tidy + vet + lint + metrics-lint + cover-check (race + coverage) + build
+make test-cover   # race + coverage run writing coverage.out (CI test gate input)
+make pin-base-images # re-pin Dockerfile FROM digests + write .docker-digests (requires docker)
+make metrics-lint # Observability standard: registry self-check, rule refs, promtool, inventory drift
+make metrics-inventory # Regenerate docs/observability/metric-registry.md from the registry
 make docker-up    # Start local observability stack (Prometheus, Grafana, Tempo, Loki)
 make docker-down  # Stop observability stack
 make clean        # Remove bin/ artefacts
@@ -78,11 +87,14 @@ internal/
 - `RequirePermissionWithLogger(action, resource, auth, logger)` — per-route RBAC with audit log entries on denial
 - `InitTracing()`, `EnsureTracing()`, `InitTracingFromEnv()` — OpenTelemetry OTLP/gRPC setup
 - `NewTracer(scope)`, `NoopTracer()`, `Tracer`/`Span` aliases, `SpanTraceID(ctx)`, `RecordSpanError(ctx, err, desc)`, `InjectTraceContext(ctx, header)`, `NewSpanTracer(scope)` (a `StartSpan` hook, e.g. pgcommon's `Config.Tracer`) — tracing outside handlers, with no OpenTelemetry import in consumers
-- `MetricsHandler()`, `NewCounterVec`/`NewCounter`/`NewGaugeVec`/`NewGauge(reg, name, help, labels...)` plus type aliases — custom metrics on `MetricsRegisterer()` with `{service, version}` const labels, with no Prometheus import in consumers
+- `Config.Domain` (required; else `OBSERVABILITY_DOMAIN`) / `Environment` (else `APP_ENV` → `ENVIRONMENT`, no aliases) — Enterprise Platform Observability Standard identity: `platform_*` metrics only, with `{domain, service, environment}` const labels (`version` only on `platform_build_info`); missing or invalid identity panics at startup. The pre-standard `http_*`/`grpc_*`/`build_info` names were removed (no compatibility period: nothing was deployed)
+- `MetricsHandler()`, `MetricsGatherer()`, `NewCounterVec`/`NewCounter`/`NewGaugeVec`/`NewGauge`/`NewHistogramVec` (Tier 3, validated: `<domain>_<service>_` prefix, suffixes, prohibited labels), `NewSharedCounterVec`/`NewSharedGaugeVec`/`NewSharedHistogramVec(reg, name)` (Tier 1/2 from the registry), `LabeledRegisterer(reg)`, plus type aliases — no Prometheus import in consumers
 - `pkg/logger.Default()` — process-wide gincommon logger for code paths without an injected one
 
+**`pkg/obsregistry`** — the Platform Observability Registry (`internal/obsregistry/registry.json`, embedded) and compliance checks: `Validate(gatherer, opts)`, `ValidateText`, `Default`, `Parse`, `ServicePrefix`. `cmd/metricslint` (`check`, `refs`, `registry`, `inventory`) is the CLI over the same code. See `docs/observability/`.
+
 **`pkg/grpccommon`** — for gRPC services:
-- `Config{ServiceName, BuildVersion, Logger}` — `ServiceName` required; `Logger` enables logging and panic recovery
+- `Config{ServiceName, BuildVersion, Logger, Domain, Environment}` — `ServiceName` and `Domain` required; `Logger` enables logging and panic recovery; observability-standard fields as in `gincommon.Config`
 - `ObservabilityUnaryInterceptors(cfg)` / `ObservabilityStreamInterceptors(cfg)` — panic recovery, request ID, tracing, metrics, logging
 - `ProtectedUnaryInterceptors(cfg)` / `ProtectedStreamInterceptors(cfg)` — `RequireAuth` + `ContextInterceptor`
 - `FullUnaryInterceptors(cfg)` / `FullStreamInterceptors(cfg)` — full stack: observability + protected
@@ -124,7 +136,9 @@ Identity headers are trusted entirely at the network layer. The consuming servic
 
 ### Metrics Initialization
 
-`metrics.Init(serviceName, buildVersion string)` is idempotent via `sync.Once` — the first caller wins. For tests that need an isolated Prometheus registry use `metrics.InitWithRegisterer(serviceName, buildVersion, prometheus.NewRegistry())` which bypasses the Once guard and accepts a custom registerer.
+`metrics.InitWithOptions(metrics.Options{ServiceName, BuildVersion, Domain, Environment})` is idempotent via `sync.Once` — the first successful caller wins; a missing domain is `metrics.ErrDomainRequired`. `pkg/gincommon`/`pkg/grpccommon` call `metrics.MustInitFromConfig`, which applies `ApplyEnvDefaults` (`BUILD_VERSION`, `OBSERVABILITY_DOMAIN`, `APP_ENV` → `ENVIRONMENT`) and panics on a missing or rejected identity. For tests that need an isolated registry use `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())`, or the `test/fixtures` helpers `InitMetrics` / `InitMetricsWithRegisterer` (test identity `iam`/`test`). `test/testenv` defaults `OBSERVABILITY_DOMAIN=iam` and `ENVIRONMENT=test` for packages that build the full stack.
+
+Middleware records through `metrics.RecordHTTP`/`RecordHTTPPanic`/`HTTPActiveInc`/`RecordGRPC`/`GRPCInflightInc`/... (`record.go`, each nil-safe). The exported collector vars (`metrics.HttpRequestsTotal`, ...) are the `platform_*` collectors; their names, help, labels and buckets come from the registry (`registryBuilder` in `metrics.go`). There are no legacy collectors.
 
 ### Key Configuration Defaults
 
@@ -213,35 +227,30 @@ TEST_SERVICE_NAME, E2E_SERVICE_NAME
 
 **Idempotent Prometheus registration** — `metrics.Init` is guarded by `sync.Once`; the first caller wins. For tests that need an isolated registry use `metrics.InitWithRegisterer(serviceName, buildVersion, prometheus.NewRegistry())`, which bypasses the Once guard.
 
+**Enterprise Platform Observability Standard** — `internal/obsregistry/registry.json` is the central registry for all platform libraries: it imports platform-events' and platform-pgcommon's released registries verbatim (their contracts win on conflict; library-specific enums on cross-emitter metrics go to `governance_notes`). Identity rules match those libraries: same env precedence, same `[a-z][a-z0-9_-]{0,62}` value rule, no `version` on platform series. The registry is the contract: shared metrics (Tier 1 `platform_*`, Tier 2 `<domain>_*`) exist only as registry entries; Tier 3 `<domain>_<service>_*` metrics are free but validated (suffixes, prohibited labels, namespace). Required labels (`domain`, `service`, `environment`) are const labels injected centrally, never declared by instrumentation. Platform HTTP `method` is bounded (non-standard methods → `OTHER`); platform gRPC uses `grpc_method` (not `method`) so each label name has one meaning. Pre-standard names (gincommon's, platform-events', platform-pgcommon's) are `removed` legacy registry entries with replacements: `metricslint` reports emitting or querying them as errors. Byte-size histograms use `_bytes` via an explicit `unit: bytes` registry exception to rule 5 (pending governance ratification).
+
 ## CI/CD
 
-GitHub Actions runs three workflows. This is a **private module** — there is no production server deployment; CI validates library quality and publishes Go module versions via git tags.
+GitHub Actions, modelled on the IAM service pipelines (iam-org-membership). This is a **private module** — there is no production deployment; CI validates library quality, and a tag publishes the Go module version. Shell logic lives in `.github/scripts/` (shellcheck-clean), not inline YAML. Actions are pinned to exact versions; Dockerfile base images are digest-pinned (`make pin-base-images`).
 
-**`.github/workflows/validate.yml`** (reusable, called by both ci.yml and release.yml):
-1. `go mod download` + `go mod verify` — module integrity
-2. `gofmt -l` — format check (fails if any files need formatting)
-3. `go mod tidy` drift check — `go.mod`/`go.sum` must be tidy
-4. `go vet` — static analysis
-5. `golangci-lint` — linter suite
-6. `govulncheck ./internal/... ./pkg/...` — vulnerability scan (library packages only; `cmd/` excluded as demo)
-7. `make test-ci` — unit + integration + e2e with race detector
+**`validate-test.yml`** (reusable; output `pct`): `go mod download/verify` → `make test-cover` (unit + integration + e2e under `-race`, one run that also writes `coverage.out` with `-coverpkg`) → `coverage-gate.sh` (≥ 98%, `COVERAGE_THRESHOLD`) → upload coverage.
 
-**`.github/workflows/ci.yml`** (push/PR to main):
-1. **validate** — calls validate.yml
-2. **coverage** — all tests with `-coverpkg` + ≥95% gate; uploads `coverage.out` artefact
-3. **build** — `make build` (demo server binary); verifies the binary is executable
-4. **docker** — (push events only) builds and pushes demo server image to GHCR with branch + SHA tags. This is the **reference/demo image**, not a production deployment.
+**`validate-quality.yml`** (reusable): mod verify → reject HTML-escaped operators in workflows/scripts → `gofmt` → tidy drift → `go vet` → golangci-lint → `make metrics-lint` (observability standard) → `govulncheck` (library packages only) → Dockerfile digest-pin check against `.docker-digests` (`check-docker-digests.sh`).
 
-**`.github/workflows/release.yml`** (push of `v*` tags):
-1. **validate** — calls validate.yml at the tag ref
-2. **build** — compile demo binary
-3. **docker** — push demo image to GHCR with semver tags (`vMAJOR.MINOR.PATCH`, `vMAJOR.MINOR`, `vMAJOR`)
-4. **publish** — create GitHub Release with notes extracted from `CHANGELOG.md`; this is the **Go module release** that consuming services pin to with `go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@vX.Y.Z`
+**`ci.yml`** (push/PR to main; skips Markdown/mermaid-only commits):
+- `validate-test` ∥ `validate-quality` ∥ `build-image` (Hadolint, ignoring DL3018 because the bases are digest-pinned; `.dockerignore` check; amd64 build into GHA + registry cache)
+- `trivy` (CRITICAL/HIGH/UNKNOWN fails; SARIF upload; CycloneDX SBOM) and `smoke` (`smoke-tests.sh`: image ≤ 60 MB; an invalid `OBSERVABILITY_DOMAIN` must exit non-zero with the registry error; `/health` ok and `/metrics` exposes `platform_build_info` / `platform_http_requests_total` with identity labels), both after validate-test + build-image
+- `interop` (platform-interop-tests) after validate-test
+- `pr-summary` (PRs: one updated status comment) and `push` (main: demo image → GHCR with branch + `sha-` tags, provenance + SBOM, Cosign keyless sign + verify). The image is the **reference/demo image**, not a production artefact.
+
+**`release.yml`** (`v*` tags or manual): validate-test ∥ validate-quality → `build` (`verify-release-tag.sh`, `verify-changelog-entry.sh` — tagging without a `## [X.Y.Z]` CHANGELOG section fails; `make build`; `prepare-release-binary.sh` cross-compiles **metricslint** for linux/darwin amd64+arm64 and windows amd64 with `.sha256` files) → `docker` (demo image with semver tags and no `latest`; Trivy CRITICAL/HIGH fails; SBOM; SLSA provenance export; Cosign sign + verify) → `publish` (`extract-release-notes.sh` + `create-github-release.sh`: notes from CHANGELOG plus module/image info; assets are the metricslint binaries, `checksums.txt`, SBOM, provenance). This is the **Go module release** consuming services pin to with `go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@vX.Y.Z`. There is no deploy gate (nothing is deployed).
+
+**`changelog-check.yml`** (PRs touching `internal/`, `pkg/`, `cmd/` or `go.mod`): fails unless `CHANGELOG.md` is updated.
 
 ## Extending the Library
 
 - **New middleware:** implement in `internal/adapter/inbound/http/middleware/`, expose via `pkg/gincommon/gincommon.go`. Thread `port.Logger` through the constructor (nil-safe) following the `MetricsMiddleware` pattern.
-- **New metrics:** register in `internal/adapter/outbound/metrics/metrics.go` inside `initMetricsWithRegisterer` — add to the `reg.MustRegister(...)` call at the bottom.
+- **New metrics:** a new `platform_*` or `<domain>_*` metric is a registry change first: add the entry (and any new label) to `internal/obsregistry/registry.json` with `"status": "proposed"` (governance approval flips it to `approved`), run `make metrics-inventory`, then build the collector from the registry in `initPlatformMetrics` (`internal/adapter/outbound/metrics/platform.go`). Never add new un-namespaced legacy collectors. `make metrics-lint` and `test/unit/platformmetrics` must pass.
 - **Replace logger:** implement `Logger` in `internal/core/port/logger.go`, place implementation in `internal/adapter/outbound/`, inject via `Config`.
 - **Replace RBAC:** implement `Authorizer` in `internal/core/port/authorizer.go`, place implementation in `internal/adapter/outbound/`, inject via `RequirePermissionWithLogger`.
 - **New use case:** add to `internal/core/service/`, depending only on `domain/` types and `port/` interfaces.

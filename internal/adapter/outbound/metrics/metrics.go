@@ -1,201 +1,242 @@
 package metrics
 
 import (
+	"errors"
+	"fmt"
 	"maps"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/obsregistry"
 )
 
-// Prometheus collectors; non-nil after Init. Label semantics match IAM-style platform metrics.
+// Prometheus collectors under the Enterprise Platform Observability Standard;
+// non-nil after initialization. Names, help, label names and buckets come from
+// the Platform Observability Registry (internal/obsregistry/registry.json), and
+// every collector carries the {domain, service, environment} const labels.
 var (
-	// HttpRequestsTotal counts requests by method, route, status_class, error_class.
+	// HttpRequestsTotal is platform_http_requests_total{method, route, status_class, error_class}.
 	HttpRequestsTotal *prometheus.CounterVec
-	// HttpRequestDuration observes latency in seconds with IAM-tuned buckets.
+	// HttpRequestDuration is platform_http_request_duration_seconds (request_duration buckets).
 	HttpRequestDuration *prometheus.HistogramVec
-	// HttpRequestSizeBytes observes request body size in bytes.
+	// HttpRequestSizeBytes is platform_http_request_size_bytes (payload_size buckets).
 	HttpRequestSizeBytes *prometheus.HistogramVec
-	// HttpResponseSizeBytes observes response body size in bytes.
+	// HttpResponseSizeBytes is platform_http_response_size_bytes (payload_size buckets).
 	HttpResponseSizeBytes *prometheus.HistogramVec
-	// HttpActiveRequests tracks in-flight requests by route template.
+	// HttpActiveRequests is platform_http_active_requests{route}.
 	HttpActiveRequests *prometheus.GaugeVec
-	// HttpPanicTotal counts recovered panics by method and route.
+	// HttpPanicTotal is platform_http_panics_total{method, route}.
 	HttpPanicTotal *prometheus.CounterVec
-	// RateLimitedRequestsTotal counts HTTP 429 responses by method and route.
+	// RateLimitedRequestsTotal is platform_http_rate_limited_requests_total{method, route}.
 	RateLimitedRequestsTotal *prometheus.CounterVec
-	// HttpRequestTimeoutTotal counts requests that hit the TimeoutMiddleware deadline.
+	// HttpRequestTimeoutTotal is platform_http_request_timeouts_total{method, route}.
 	HttpRequestTimeoutTotal *prometheus.CounterVec
-	// BuildInfo is a gauge set to 1 with service/version const labels.
+
+	// GrpcRequestsTotal is platform_grpc_server_handled_total{grpc_method, grpc_code, status_class, error_class}.
+	GrpcRequestsTotal *prometheus.CounterVec
+	// GrpcRequestDuration is platform_grpc_server_handling_seconds{grpc_method, status_class, error_class}.
+	GrpcRequestDuration *prometheus.HistogramVec
+	// GrpcRequestSizeBytes is platform_grpc_server_request_size_bytes.
+	GrpcRequestSizeBytes *prometheus.HistogramVec
+	// GrpcResponseSizeBytes is platform_grpc_server_response_size_bytes.
+	GrpcResponseSizeBytes *prometheus.HistogramVec
+	// GrpcInflight is platform_grpc_server_inflight_requests{grpc_method}.
+	GrpcInflight *prometheus.GaugeVec
+	// GrpcRateLimitedRequestsTotal is platform_grpc_rate_limited_requests_total{grpc_method}.
+	GrpcRateLimitedRequestsTotal *prometheus.CounterVec
+	// GrpcPanicTotal is platform_grpc_panics_total{grpc_method}.
+	GrpcPanicTotal *prometheus.CounterVec
+
+	// BuildInfo is platform_build_info{version}, always 1.
 	BuildInfo *prometheus.GaugeVec
 
 	initOnce sync.Once
 	// initMu guards writes to the package-level collector vars.
-	// Init is protected by initOnce; InitWithRegisterer (test-only) uses this mutex
-	// to prevent a data race when called while other goroutines read the vars.
+	// InitWithOptions is protected by initOnce; InitWithRegistererOptions (tests)
+	// uses this mutex to prevent a data race when called while other goroutines
+	// read the vars.
 	initMu sync.Mutex
 
-	// currentRegisterer and currentConstLabels record the registerer and const labels
-	// used by the most recent Init/InitWithRegisterer call, for Registerer/ConstLabels.
+	// currentRegisterer, currentConstLabels and currentOptions record the
+	// registerer, const labels and options of the most recent Init* call.
 	currentRegisterer  prometheus.Registerer
 	currentConstLabels prometheus.Labels
+	currentOptions     Options
 )
 
 const defaultVersion = "unknown"
 
-// Init registers Prometheus collectors with const labels service and version.
-// It is idempotent via sync.Once: the first caller wins. All reads of the package-level
-// vars are safe after Init returns because sync.Once provides the required happens-before.
-// Empty buildVersion is stored as "unknown".
-func Init(serviceName, buildVersion string) {
-	initOnce.Do(func() {
-		if buildVersion == "" {
-			buildVersion = defaultVersion
-		}
-		initMu.Lock()
-		defer initMu.Unlock()
-		initMetricsWithRegisterer(serviceName, buildVersion, prometheus.DefaultRegisterer)
-	})
+// Options identifies the emitting service for the centrally injected labels.
+type Options struct {
+	// ServiceName is the service const label (required).
+	ServiceName string
+	// BuildVersion is the platform_build_info version label; empty becomes "unknown".
+	BuildVersion string
+	// Domain is the registry domain const label (required).
+	Domain string
+	// Environment is the environment const label (required; trimmed and
+	// lowercased, then checked against the registry vocabulary).
+	Environment string
 }
 
-// InitWithRegisterer initializes metrics using the provided Prometheus registerer.
-// Unlike Init, it does not use sync.Once, allowing test packages to use isolated
-// registries (prometheus.NewRegistry()) to avoid cross-test pollution.
-// Must be called before any middleware goroutines start — concurrent calls with
-// in-flight requests are not safe even with the mutex because readers do not lock.
-// It panics on duplicate registration just like prometheus.MustRegister.
-func InitWithRegisterer(serviceName, buildVersion string, reg prometheus.Registerer) {
-	if buildVersion == "" {
-		buildVersion = defaultVersion
+// ErrDomainRequired is returned when no domain is configured: every metric
+// carries the domain label, so there is nothing valid to emit without one.
+var ErrDomainRequired = errors.New("metrics: a domain is required (set Config.Domain or OBSERVABILITY_DOMAIN to a registry domain)")
+
+func (o Options) resolve() (Options, error) {
+	if o.Domain == "" {
+		return o, ErrDomainRequired
 	}
-	// Consume initOnce so a subsequent Init call does not overwrite the custom registry.
-	// Without this, Init (which uses initOnce.Do) fires after InitWithRegisterer and
-	// replaces all package-level vars with DefaultRegisterer collectors.
+	env, err := obsregistry.Default().CheckIdentity(o.Domain, o.ServiceName, o.Environment)
+	if err != nil {
+		return o, fmt.Errorf("metrics: %w", err)
+	}
+	o.Environment = env
+	if o.BuildVersion == "" {
+		o.BuildVersion = defaultVersion
+	}
+	return o, nil
+}
+
+// ApplyEnvDefaults fills the fields a pkg-level Config left empty: the build
+// version from BUILD_VERSION (then "unknown"), the domain from
+// OBSERVABILITY_DOMAIN, and the environment from APP_ENV, then ENVIRONMENT —
+// the precedence platform-events and platform-pgcommon use.
+func ApplyEnvDefaults(opts Options) Options {
+	if opts.BuildVersion == "" {
+		opts.BuildVersion = config.BuildVersion()
+	}
+	if opts.Domain == "" {
+		opts.Domain = config.ObservabilityDomain()
+	}
+	if opts.Environment == "" {
+		opts.Environment = config.ObservabilityEnvironment()
+	}
+	return opts
+}
+
+// MustInitFromConfig initializes metrics for a pkg-level Config with
+// ApplyEnvDefaults. It panics on a missing domain or an identity the registry
+// rejects (unknown domain, invalid service, unmappable environment), like the
+// empty-ServiceName check, so misconfiguration fails at startup rather than
+// corrupting cross-service aggregation.
+func MustInitFromConfig(opts Options) {
+	if err := InitWithOptions(ApplyEnvDefaults(opts)); err != nil {
+		panic(err.Error())
+	}
+}
+
+// InitWithOptions validates the identity against the Platform Observability
+// Registry and registers the collectors on prometheus.DefaultRegisterer. It is
+// idempotent via sync.Once: the first successful caller wins. A validation
+// error is returned without consuming the once guard.
+func InitWithOptions(opts Options) error {
+	opts, err := opts.resolve()
+	if err != nil {
+		return err
+	}
+	initOnce.Do(func() {
+		initMu.Lock()
+		defer initMu.Unlock()
+		initCollectors(opts, prometheus.DefaultRegisterer)
+	})
+	return nil
+}
+
+// InitWithRegistererOptions is InitWithOptions on reg without the once guard,
+// so tests can use isolated registries (prometheus.NewRegistry()). It consumes
+// the once guard so a later InitWithOptions does not replace the collectors.
+// Must be called before any middleware goroutines start. It panics on
+// duplicate registration just like prometheus.MustRegister.
+func InitWithRegistererOptions(opts Options, reg prometheus.Registerer) error {
+	opts, err := opts.resolve()
+	if err != nil {
+		return err
+	}
 	initOnce.Do(func() {})
 	initMu.Lock()
 	defer initMu.Unlock()
-	initMetricsWithRegisterer(serviceName, buildVersion, reg)
+	initCollectors(opts, reg)
+	return nil
 }
 
-func initMetricsWithRegisterer(serviceName, buildVersion string, reg prometheus.Registerer) {
+func initCollectors(opts Options, reg prometheus.Registerer) {
 	constLabels := prometheus.Labels{
-		"service": serviceName,
-		"version": buildVersion,
+		"domain":      opts.Domain,
+		"environment": opts.Environment,
+		"service":     opts.ServiceName,
 	}
 	currentRegisterer = reg
 	currentConstLabels = constLabels
+	currentOptions = opts
 
-	httpOutcomeLabels := []string{"method", "route", "status_class", "error_class"}
+	b := registryBuilder{reg: obsregistry.Default(), constLabels: constLabels}
+	BuildInfo = b.gaugeVec("platform_build_info")
+	BuildInfo.WithLabelValues(opts.BuildVersion).Set(1)
 
-	HttpRequestsTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name:        "http_requests_total",
-			Help:        "Total HTTP requests by method, route template, status class (3xx counted as 2xx), and error class",
-			ConstLabels: constLabels,
-		},
-		httpOutcomeLabels,
-	)
+	HttpRequestsTotal = b.counterVec("platform_http_requests_total")
+	HttpRequestDuration = b.histogramVec("platform_http_request_duration_seconds")
+	HttpRequestSizeBytes = b.histogramVec("platform_http_request_size_bytes")
+	HttpResponseSizeBytes = b.histogramVec("platform_http_response_size_bytes")
+	HttpActiveRequests = b.gaugeVec("platform_http_active_requests")
+	HttpPanicTotal = b.counterVec("platform_http_panics_total")
+	RateLimitedRequestsTotal = b.counterVec("platform_http_rate_limited_requests_total")
+	HttpRequestTimeoutTotal = b.counterVec("platform_http_request_timeouts_total")
 
-	HttpRequestDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:        "http_request_duration_seconds",
-			Help:        "HTTP request latency in seconds by method, route template, status class, and error class",
-			Buckets:     RequestDurationBuckets,
-			ConstLabels: constLabels,
-		},
-		httpOutcomeLabels,
-	)
+	GrpcRequestsTotal = b.counterVec("platform_grpc_server_handled_total")
+	GrpcRequestDuration = b.histogramVec("platform_grpc_server_handling_seconds")
+	GrpcRequestSizeBytes = b.histogramVec("platform_grpc_server_request_size_bytes")
+	GrpcResponseSizeBytes = b.histogramVec("platform_grpc_server_response_size_bytes")
+	GrpcInflight = b.gaugeVec("platform_grpc_server_inflight_requests")
+	GrpcRateLimitedRequestsTotal = b.counterVec("platform_grpc_rate_limited_requests_total")
+	GrpcPanicTotal = b.counterVec("platform_grpc_panics_total")
 
-	HttpPanicTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name:        "http_panic_total",
-			Help:        "Total HTTP handler panics recovered",
-			ConstLabels: constLabels,
-		},
-		[]string{"method", "route"},
-	)
-
-	HttpRequestSizeBytes = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:        "http_request_size_bytes",
-			Help:        "HTTP request body size in bytes",
-			Buckets:     PayloadSizeBuckets,
-			ConstLabels: constLabels,
-		},
-		httpOutcomeLabels,
-	)
-
-	HttpResponseSizeBytes = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:        "http_response_size_bytes",
-			Help:        "HTTP response body size in bytes",
-			Buckets:     PayloadSizeBuckets,
-			ConstLabels: constLabels,
-		},
-		httpOutcomeLabels,
-	)
-
-	HttpActiveRequests = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name:        "http_active_requests",
-			Help:        "Active HTTP requests being handled",
-			ConstLabels: constLabels,
-		},
-		[]string{"route"},
-	)
-
-	RateLimitedRequestsTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name:        "rate_limited_requests_total",
-			Help:        "Total HTTP requests rejected by rate limiting (429)",
-			ConstLabels: constLabels,
-		},
-		[]string{"method", "route"},
-	)
-
-	HttpRequestTimeoutTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name:        "http_request_timeout_total",
-			Help:        "Total HTTP requests that timed out before the handler responded",
-			ConstLabels: constLabels,
-		},
-		[]string{"method", "route"},
-	)
-
-	BuildInfo = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name:        "build_info",
-			Help:        "Build information",
-			ConstLabels: constLabels,
-		},
-		[]string{},
-	)
-	BuildInfo.WithLabelValues().Set(1)
-
-	initGRPCMetrics(constLabels)
-
-	reg.MustRegister(
-		BuildInfo,
-		HttpRequestsTotal,
-		HttpRequestDuration,
-		HttpRequestSizeBytes,
-		HttpResponseSizeBytes,
-		HttpActiveRequests,
-		HttpPanicTotal,
-		RateLimitedRequestsTotal,
-		HttpRequestTimeoutTotal,
-		GrpcRequestsTotal,
-		GrpcRequestDuration,
-		GrpcRequestSizeBytes,
-		GrpcResponseSizeBytes,
-		GrpcInflight,
-		GrpcRateLimitedRequestsTotal,
-		GrpcPanicTotal,
-	)
+	reg.MustRegister(b.built...)
 }
 
-// Registerer returns the prometheus.Registerer collectors were registered to by the most
-// recent Init or InitWithRegisterer call. Returns prometheus.DefaultRegisterer if neither
-// has been called yet, matching the registerer Init would use.
+// registryBuilder builds collectors from registry entries. A missing or
+// mistyped entry is a defect in this module (covered by tests) and panics.
+type registryBuilder struct {
+	reg         *obsregistry.Registry
+	constLabels prometheus.Labels
+	built       []prometheus.Collector
+}
+
+func (b *registryBuilder) entry(name string, t obsregistry.Type) *obsregistry.Metric {
+	m, ok := b.reg.Lookup(name)
+	if !ok || m.Type != t {
+		panic(fmt.Sprintf("metrics: registry has no %s %q", t, name))
+	}
+	return m
+}
+
+func (b *registryBuilder) counterVec(name string) *prometheus.CounterVec {
+	m := b.entry(name, obsregistry.Counter)
+	c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: m.Name, Help: m.Help, ConstLabels: b.constLabels}, m.Labels)
+	b.built = append(b.built, c)
+	return c
+}
+
+func (b *registryBuilder) gaugeVec(name string) *prometheus.GaugeVec {
+	m := b.entry(name, obsregistry.Gauge)
+	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: m.Name, Help: m.Help, ConstLabels: b.constLabels}, m.Labels)
+	b.built = append(b.built, g)
+	return g
+}
+
+func (b *registryBuilder) histogramVec(name string) *prometheus.HistogramVec {
+	m := b.entry(name, obsregistry.Histogram)
+	h := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: m.Name, Help: m.Help, ConstLabels: b.constLabels, Buckets: b.reg.Buckets(m.Buckets),
+	}, m.Labels)
+	b.built = append(b.built, h)
+	return h
+}
+
+// Registerer returns the prometheus.Registerer the collectors were registered
+// to by the most recent Init* call, or prometheus.DefaultRegisterer before any.
 func Registerer() prometheus.Registerer {
 	initMu.Lock()
 	defer initMu.Unlock()
@@ -205,9 +246,9 @@ func Registerer() prometheus.Registerer {
 	return currentRegisterer
 }
 
-// ConstLabels returns a copy of the {service, version} const labels applied to this
-// package's own collectors, so callers can apply matching labels to custom collectors.
-// Returns an empty map if Init/InitWithRegisterer has not been called yet.
+// ConstLabels returns a copy of the {domain, environment, service} const labels
+// every collector carries (version is only on platform_build_info), so custom
+// collectors can match them. Empty before initialization.
 func ConstLabels() prometheus.Labels {
 	initMu.Lock()
 	defer initMu.Unlock()
@@ -216,28 +257,17 @@ func ConstLabels() prometheus.Labels {
 	return out
 }
 
-// RequestBodySize returns the request body size in bytes for histogram observation.
-// Both Content-Length: -1 (unknown/chunked transfer) and Content-Length: 0 (empty body)
-// return 0; streaming request sizes are not captured without body wrapping.
-func RequestBodySize(contentLength int64) float64 {
-	if contentLength > 0 {
-		return float64(contentLength)
-	}
-	return 0
+// Identity returns the domain and service of the most recent Init* call (empty
+// before initialization).
+func Identity() (domain, service string) {
+	initMu.Lock()
+	defer initMu.Unlock()
+	return currentOptions.Domain, currentOptions.ServiceName
 }
 
-// RecordHTTPRateLimited increments rate_limited_requests_total for explicit rate-limit paths.
-func RecordHTTPRateLimited(method, route string) {
-	if RateLimitedRequestsTotal == nil {
-		return
-	}
-	RateLimitedRequestsTotal.WithLabelValues(method, route).Inc()
-}
-
-// RecordHTTPTimeout increments http_request_timeout_total when TimeoutMiddleware fires.
-func RecordHTTPTimeout(method, route string) {
-	if HttpRequestTimeoutTotal == nil {
-		return
-	}
-	HttpRequestTimeoutTotal.WithLabelValues(method, route).Inc()
+// Initialized reports whether the collectors are registered.
+func Initialized() bool {
+	initMu.Lock()
+	defer initMu.Unlock()
+	return BuildInfo != nil
 }

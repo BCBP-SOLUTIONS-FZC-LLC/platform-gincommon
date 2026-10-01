@@ -19,7 +19,7 @@ func TestRequestOutcome(t *testing.T) {
 		{http.StatusUnauthorized, "client_error"},
 		{http.StatusInternalServerError, "server_error"},
 		{0, "server_error"},
-		{199, "server_error"},
+		{199, "success"}, // 1xx is informational, not a failure (101 = WebSocket upgrade)
 	}
 
 	for _, tc := range tests {
@@ -46,5 +46,21 @@ func TestHTTPStatusClass(t *testing.T) {
 		if got := metrics.HTTPStatusClass(tc.code); got != tc.want {
 			t.Errorf("HTTPStatusClass(%d) = %q, want %q", tc.code, got, tc.want)
 		}
+	}
+}
+
+// 1xx responses (e.g. 101 Switching Protocols for WebSocket upgrades) are not
+// failures; counting them as 5xx would page on the platform SLO burn-rate alerts.
+func TestStatusClass_InformationalIsSuccess(t *testing.T) {
+	for _, code := range []int{100, 101, 103} {
+		if got := metrics.HTTPStatusClass(code); got != "2xx" {
+			t.Errorf("HTTPStatusClass(%d) = %q, want 2xx", code, got)
+		}
+		if got := metrics.RequestOutcome(code); got != "success" {
+			t.Errorf("RequestOutcome(%d) = %q, want success", code, got)
+		}
+	}
+	if got := metrics.HTTPStatusClass(99); got != "5xx" {
+		t.Errorf("HTTPStatusClass(99) = %q, want 5xx for an invalid code", got)
 	}
 }
