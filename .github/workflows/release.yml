@@ -368,7 +368,7 @@ jobs:
     # receives GO_PRIVATE_TOKEN cannot change under a release. The harness
     # itself (run_interop.sh, sibling repos) is still checked out at main by
     # interop.yml, by design. Bump together with ci.yml.
-    uses: BCBP-SOLUTIONS-FZC-LLC/platform-interop-tests/.github/workflows/interop.yml@c7e62e6976274ed4cf9c78f86b5f58467e59afc2 # main 2026-10-02 (no tags yet)
+    uses: BCBP-SOLUTIONS-FZC-LLC/platform-interop-tests/.github/workflows/interop.yml@5475fcdd4ec3676253f0c7171bc378a2231bd4a9 # main 2026-10-02 (platform-interop-tests#3 + #4: module-path-aware go-probe + private module fetch)
     with:
       platform_gincommon_ref: ${{ github.event.inputs.tag || github.ref_name }}
     secrets:
