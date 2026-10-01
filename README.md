@@ -187,7 +187,7 @@ The core never imports Gin, gRPC, Prometheus or OpenTelemetry; interfaces in `co
 | Concern | Technology | Notes |
 |---|---|---|
 | **HTTP framework** | Gin `v1.12.0` | `SetTrustedProxies(nil)` in the demo — consumers behind a proxy set their CIDRs |
-| **gRPC** | `google.golang.org/grpc v1.83.1` | Custom interceptors (no otelgrpc dependency); `grpc/health` for `RegisterHealth` |
+| **gRPC** | `google.golang.org/grpc v1.83.2` | Custom interceptors (no otelgrpc dependency); `grpc/health` for `RegisterHealth` |
 | **Metrics** | Prometheus `client_golang v1.24.1` | Registered on `prometheus.DefaultRegisterer` unless an isolated registry is passed; `/metrics` uses `ContinueOnError` |
 | **Tracing** | OpenTelemetry `v1.45.0`, OTLP/gRPC exporter | One delegating global provider (its inner SDK provider is swapped atomically); in-process fallback when the exporter cannot be created |
 | **Logging** | Zap `v1.28.0` | JSON in production, console in dev/local; sampling off unless `LOG_SAMPLING=true` |

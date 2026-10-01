@@ -134,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **deps:** Bumped `google.golang.org/grpc` `v1.83.0` → `v1.83.1`, clearing govulncheck finding GO-2026-6348. Patch release; no `pkg/gincommon`/`pkg/grpccommon` API change.
+- **deps:** Bumped `google.golang.org/grpc` `v1.83.0` → `v1.83.2`. `v1.83.1` cleared govulncheck finding GO-2026-6348; `v1.83.2` clears GHSA-2v4p-qf9q-27wj (xDS server DoS on missing `:authority`/`Host`, high; the library does not use xDS). Indirect `golang.org/x/{crypto,net,text,tools,mod}` patch bumps. No `pkg/gincommon`/`pkg/grpccommon` API change.
 
 - **Production hardening — HTTP:**
   - `x-tenant-roles` is now capped at 4096 bytes and 64 distinct valid roles. `ContextMiddleware` rejects over-limit headers with 401 `invalid tenant roles`, the same way as other invalid identity. `domain.ParseRoles`, which the gRPC context interceptor uses, fails closed and returns no roles on over-limit input.
