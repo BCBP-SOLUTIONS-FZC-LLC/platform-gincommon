@@ -49,7 +49,7 @@ func TestMiddlewareFlow(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
-	if got := w.Header().Get("x-request-id"); got != "fixed-req-id" {
+	if got := w.Result().Header.Get("x-request-id"); got != "fixed-req-id" {
 		t.Fatalf("x-request-id = %q want fixed-req-id", got)
 	}
 
@@ -81,7 +81,7 @@ func TestMiddlewareFlow_GeneratesRequestIDWhenMissing(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if w.Header().Get("x-request-id") == "" {
+	if w.Result().Header.Get("x-request-id") == "" {
 		t.Fatal("expected generated x-request-id header")
 	}
 }

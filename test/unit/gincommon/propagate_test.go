@@ -14,7 +14,7 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
 )
 
-func TestPropagateHeaders_InjectsIdentityHeaders(t *testing.T) {
+func TestPropagateIdentityHeaders_InjectsIdentityHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
@@ -31,7 +31,7 @@ func TestPropagateHeaders_InjectsIdentityHeaders(t *testing.T) {
 	c.Set(middleware.CtxRequestIDKey, "req-abc")
 
 	outbound, _ := http.NewRequest(http.MethodGet, "http://downstream/api", nil)
-	gincommon.PropagateHeaders(c, outbound)
+	gincommon.PropagateIdentityHeaders(c, outbound)
 
 	if got := outbound.Header.Get("x-user-id"); got != "user-1" {
 		t.Fatalf("x-user-id = %q, want user-1", got)
@@ -58,7 +58,7 @@ func TestPropagateHeaders_WithoutRequestContext(t *testing.T) {
 	// No RequestContext set, no request ID set.
 
 	outbound, _ := http.NewRequest(http.MethodGet, "http://downstream/api", nil)
-	gincommon.PropagateHeaders(c, outbound)
+	gincommon.PropagateIdentityHeaders(c, outbound)
 
 	// Identity headers should not be set.
 	if got := outbound.Header.Get("x-user-id"); got != "" {
@@ -86,7 +86,7 @@ func TestPropagateHeaders_RequestIDPropagated(t *testing.T) {
 	}
 }
 
-func TestPropagateHeaders_EmptyRoles_NoRolesHeader(t *testing.T) {
+func TestPropagateIdentityHeaders_EmptyRoles_NoRolesHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
@@ -102,9 +102,26 @@ func TestPropagateHeaders_EmptyRoles_NoRolesHeader(t *testing.T) {
 	c.Set(gincommon.RequestContextKey, rc)
 
 	outbound, _ := http.NewRequest(http.MethodGet, "http://downstream/api", nil)
-	gincommon.PropagateHeaders(c, outbound)
+	gincommon.PropagateIdentityHeaders(c, outbound)
 
 	if got := outbound.Header.Get("x-tenant-roles"); got != "" {
 		t.Fatalf("x-tenant-roles = %q, want empty when roles is nil", got)
+	}
+}
+
+// A roles header already on the outbound request is removed when the caller has no
+// verified roles, so an unverified value is never forwarded (parity with the gRPC
+// identity client interceptor).
+func TestPropagateIdentityHeaders_ClearsStaleRolesHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request, _ = http.NewRequest(http.MethodGet, "/", nil)
+	c.Set(gincommon.RequestContextKey, &domain.RequestContext{UserID: "u", TenantID: "t"})
+
+	outbound, _ := http.NewRequest(http.MethodGet, "http://downstream/api", nil)
+	outbound.Header.Set("x-tenant-roles", "admin")
+	gincommon.PropagateIdentityHeaders(c, outbound)
+	if got := outbound.Header.Get("x-tenant-roles"); got != "" {
+		t.Fatalf("x-tenant-roles = %q, want removed", got)
 	}
 }

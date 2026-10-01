@@ -26,7 +26,7 @@ The registry is the single central contract for every platform library. The libr
 | platform-eventcommon (Python port of platform-events) | 18 of platform-events' 23 Tier 1 metrics (no inbox, queue-depth sampler, handler timeout or ordered outbox in Python); `platform_library_info{library="platform-eventcommon"}` | Scrape validates with 0 errors |
 | platform-pgcommon-py (Python port of platform-pgcommon) | All `platform_db_*` except `platform_db_pool_connections{state="constructing"}` (asyncpg can't report it) | Scrape validates with 0 errors |
 
-`python_*` runtime collectors are exempt like `go_*`, and prometheus_client's `<metric>_created` companion families are classified with their parent.
+`python_*` runtime collectors are exempt like `go_*`, and prometheus_client's `<metric>_created` companion families are classified with their parent: a gauge or untyped `X_created` whose series carry exactly the label sets of the counter `X_total` or the histogram/summary `X`. Any other `*_created` family is validated as a metric of its own.
 
 Where a library's own registry restricts a label more tightly than this one (for example platform-events' `dependency ∈ {sns, sqs, codec}`), the central entry keeps the platform-wide vocabulary for metrics any service may emit, and records the library's set in `governance_notes`. The library's own CI still enforces its narrower set.
 
@@ -59,6 +59,8 @@ r.Use(gincommon.ObservabilityMiddlewares(cfg)...)
 
 - **The domain is required.** Set `Config.Domain` or `OBSERVABILITY_DOMAIN`; gincommon emits only `platform_http_*`, `platform_grpc_*` and `platform_build_info{version}`. The pre-standard names (`http_requests_total`, ...) were removed with no compatibility period, because no platform library had been deployed.
 - `ObservabilityMiddlewares` (and the `grpccommon` interceptor constructors) **panic at startup** on a missing domain, on a domain that is not in the registry, on a service name that is not kebab-case, or on an environment outside `local, dev, test, staging, prod` (after trimming and lowercasing). There are no aliases: `APP_ENV=production` is rejected, so set `prod`. platform-events and platform-pgcommon read the same variables in the same order, so every library in the process gets the same label. This fails at startup on purpose, like the empty-`ServiceName` check: a bad identity label would corrupt cross-service aggregation for every metric.
+- The build version (`Config.BuildVersion`, else `BUILD_VERSION`, else `unknown`) is trimmed and **sanitised** to the registry's `version` pattern `^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$` instead of failing startup: a leading `refs/tags/` or `refs/heads/` is removed, any other character becomes `_`, leading non-alphanumerics are dropped, and the result is cut to 64 characters (`refs/tags/v1.4.0` → `v1.4.0`, `feat/observability-api` → `feat_observability-api`). A rewritten value is reported once on stderr with the original and the sanitised value. Only a version with nothing usable left (e.g. `///`) panics.
+- **One identity per process.** The first successful initialization fixes `domain`, `service`, `environment` and `version`. Building the stack again with the same identity (several routers, HTTP plus gRPC) is fine. A later initialization with no version (`unknown`, e.g. a `grpccommon.Config{}` without `BUILD_VERSION` next to `gincommon.Config{BuildVersion: "1.4.0"}`) inherits the established version. The reverse is still a mismatch: if the first stack established `unknown`, a later one naming a real version panics, so build the versioned stack first or set `BUILD_VERSION`. A different one panics with `metrics: already initialized with a different identity: <field> ...`, because otherwise it would be silently ignored and the second service's metrics would be reported under the first one's labels. A failed initialization (bad identity, or a registration conflict) registers nothing and can be retried.
 - The metrics constructors (`NewCounterVec`, `NewShared*`, ...) return an error until `ObservabilityMiddlewares` or the gRPC interceptors have initialized metrics, because the identity labels are not known yet.
 
 ### Shared metrics (Tier 1 and 2)
@@ -108,9 +110,11 @@ platform-events and platform-pgcommon inject the identity labels themselves from
 ```go
 // metrics_compliance_test.go: build the real router/server, drive one request, then:
 rep, err := obsregistry.Validate(gincommon.MetricsGatherer(), obsregistry.Options{})
-if err != nil { t.Fatal(err) }
+if err != nil { t.Fatal(err) } // a collector failed; rep still holds the families that were gathered
 for _, f := range rep.Errors() { t.Error(f) }
 ```
+
+> **Strict mode currently fails on every gincommon service.** All metrics gincommon emits (`platform_http_*`, `platform_grpc_*`, `platform_build_info`) are `status: proposed` until observability governance ratifies them (see [Items awaiting ratification](#items-awaiting-ratification)). `metricslint check -strict` and `Options{Strict: true}` turn proposed entries into errors, so they fail on gincommon's own metrics regardless of what the service does. The same holds for the platform-events (`platform_queue_depth`, `platform_messages_*`, `platform_outbox_*`, ...) and platform-pgcommon (`platform_db_*`) entries, which are also proposed and owned by those libraries. Until ratification, either run without `-strict` (proposed entries are warnings), or keep strict mode for everything the service emits itself and exempt the platform libraries' metrics; `-allow-proposed-owner` takes a comma-separated list: `metricslint check -strict -allow-proposed-owner platform-gincommon,platform-events,platform-pgcommon` / `Options{Strict: true, AllowProposedOwners: []string{"platform-gincommon", "platform-events", "platform-pgcommon"}}`. The only proposed entries without an owner are the four Tier 2 `iam_*` metrics (`iam_auth_events_total`, `iam_tenant_resolution_total`, `iam_identity_sync_total`, `iam_realm_operations_total`), which IAM services emit themselves through `NewSharedCounterVec`; they stay errors under `-strict` whatever owners are allowed.
 
 Each gincommon release attaches prebuilt `metricslint` binaries (linux/darwin amd64+arm64, windows amd64) with a `checksums.txt`, so CI can download one instead of `go run`.
 
@@ -120,6 +124,8 @@ go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/cmd/metricslint@vX.Y
 # Live scrape, e.g. in an e2e job:
 go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/cmd/metricslint@vX.Y.Z check -url http://localhost:8080/metrics
 ```
+
+`metricslint` exit codes: **0** compliant, **1** findings (for `registry`: the document is readable but violates the standard), **2** usage or I/O error (bad flags, `-url` together with files, a missing or unreadable file, a failed scrape). `check` accepts the Prometheus text format and OpenMetrics text (recognized by its `# EOF` line; timestamps, exemplars, `# UNIT` and `_created` samples are ignored, `unknown` families are treated as untyped). `refs` walks directories recursively, skipping `.git`, `node_modules` and `vendor` (unless named explicitly). A path it cannot read, inside a walked directory or named on the command line, and any file over 64 MiB, is reported as an error finding and the scan continues; once every finding is printed the exit code is **2** (I/O error) rather than 1.
 
 What `Validate` / `metricslint check` enforce on every emitted metric:
 
@@ -131,9 +137,11 @@ What `Validate` / `metricslint check` enforce on every emitted metric:
 | `required-label` | `domain`, `service` and `environment` present as the tier requires |
 | `label-vocabulary` | Shared metrics carry exactly the registry labels plus const labels |
 | `prohibited-label` | No high-cardinality labels on any tier |
+| `label-name` | Service-owned labels on Tier 3 metrics are snake_case `[a-z0-9_]` |
 | `label-value` | Values inside the enum/pattern of every vocabulary label |
 | `cardinality` | Distinct values per label within the registry's `max_values` |
-| `status` | `proposed` entries warn (error with `-strict` / `Options{Strict: true}` once governance ratifies) |
+| `status` | `proposed` entries warn (error with `-strict` / `Options{Strict: true}`, except owners listed in `-allow-proposed-owner` / `AllowProposedOwners`) |
+| `gather` | (`Validate` only) a collector failed during `Gather`; the families that were gathered are still validated |
 | `removed` | A pre-standard name that was removed: emitting or querying it is an **error** naming the replacement |
 | `deprecated` | (Future migrations only) a legacy name still emitted during a compatibility period: a warning |
 
@@ -157,7 +165,7 @@ Everything with `status: proposed` in [`metric-registry.md`](metric-registry.md)
 - **Registry-proposed examples from the standard:** `platform_duplicate_messages_total`, `platform_queue_depth`, `platform_dlq_depth`, `platform_dependency_request_seconds`, `platform_event_propagation_seconds`.
 - **The HTTP and gRPC server metrics gincommon emits:** `platform_http_*`, `platform_grpc_*`, `platform_build_info`.
 - **IAM's domain metrics:** `iam_auth_events_total`, `iam_tenant_resolution_total`, `iam_identity_sync_total`, `iam_realm_operations_total`. Their definitions must be confirmed by IAM's owners.
-- **Byte-size histograms** (`platform_*_size_bytes`). Rule 5 says histograms end in `_seconds`. The registry allows `_bytes` only for entries with `unit: bytes` and flags this as a deliberate exception. Governance should confirm it, or decide to drop payload histograms.
+- **Byte-size histograms** (`platform_*_size_bytes`). Rule 5 says histograms end in `_seconds`. The registry allows `_bytes` only for entries with `unit: bytes` and flags this as a deliberate exception. Governance should confirm it, or decide to drop payload histograms. The gincommon-owned `payload_size` preset runs from 128 B to 4 MiB (the gRPC default maximum message size) with a 16 MiB tail; HTTP requests of unknown length (chunked uploads) are not observed in `platform_http_request_size_bytes`, so its `_count` can be lower than `platform_http_requests_total`.
 - **The vocabularies:** the domain list (in particular the `tender_management` spelling), the environment values, and the `outcome` enum.
 
 The five canonical messaging metrics (`platform_messages_received_total`, `platform_messages_processed_total`, `platform_messages_failed_total`, `platform_retry_total`, `platform_dlq_messages_total`) are registered as `approved`, as given in the standard.

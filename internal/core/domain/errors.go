@@ -10,4 +10,6 @@ var (
 	ErrMissingUser = errors.New("missing user id")
 	// ErrForbidden indicates the authorizer denied the action.
 	ErrForbidden = errors.New("forbidden")
+	// ErrInvalidRoles indicates x-tenant-roles exceeded MaxRolesHeaderLen or MaxRoles.
+	ErrInvalidRoles = errors.New("invalid tenant roles")
 )

@@ -1,8 +1,9 @@
 package metrics
 
-// Recording helpers used by the HTTP middleware and gRPC interceptors. Each is
-// a no-op before initialization (nil collectors), so consumers that skip
-// metrics are unaffected.
+// Recording helpers used by the HTTP middleware and gRPC interceptors. Each
+// loads the atomically published collector set and is a no-op before
+// initialization, so consumers that skip metrics are unaffected and recording
+// never races with (test) re-initialization.
 
 // standardHTTPMethods bounds the method label; anything else (arbitrary tokens
 // are valid HTTP methods) is reported as OTHER.
@@ -19,113 +20,130 @@ func HTTPMethodLabel(method string) string {
 	return "OTHER"
 }
 
-// RequestBodySize returns the request body size in bytes for histogram observation.
-// Both Content-Length: -1 (unknown/chunked transfer) and Content-Length: 0 (empty body)
-// return 0; streaming request sizes are not captured without body wrapping.
+// UnknownSize is the size RequestBodySize reports for an unknown body length
+// (Content-Length -1, e.g. chunked transfer). RecordHTTP and RecordGRPC skip
+// the size observation for negative sizes rather than recording a false 0.
+const UnknownSize = -1
+
+// RequestBodySize returns the request body size in bytes for histogram
+// observation: the Content-Length when known (0 for an empty body), else
+// UnknownSize. Streaming request sizes are not captured without body wrapping.
 func RequestBodySize(contentLength int64) float64 {
-	if contentLength > 0 {
+	if contentLength >= 0 {
 		return float64(contentLength)
 	}
-	return 0
+	return UnknownSize
 }
 
 // HTTPEnabled reports whether the HTTP collectors are registered.
 func HTTPEnabled() bool {
-	return HttpRequestsTotal != nil && HttpActiveRequests != nil
+	return active.Load() != nil
 }
 
 // HTTPActiveInc increments platform_http_active_requests for route.
 func HTTPActiveInc(route string) {
-	if HttpActiveRequests != nil {
-		HttpActiveRequests.WithLabelValues(route).Inc()
+	if cs := active.Load(); cs != nil {
+		cs.httpActive.WithLabelValues(route).Inc()
 	}
 }
 
 // HTTPActiveDec decrements platform_http_active_requests for route.
 func HTTPActiveDec(route string) {
-	if HttpActiveRequests != nil {
-		HttpActiveRequests.WithLabelValues(route).Dec()
+	if cs := active.Load(); cs != nil {
+		cs.httpActive.WithLabelValues(route).Dec()
 	}
 }
 
-// RecordHTTP observes one completed HTTP request.
+// RecordHTTP observes one completed HTTP request. A negative reqSize or
+// respSize (UnknownSize) is not observed.
 func RecordHTTP(method, route, statusClass, errorClass string, seconds, reqSize, respSize float64) {
-	if HttpRequestsTotal == nil {
+	cs := active.Load()
+	if cs == nil {
 		return
 	}
 	m := HTTPMethodLabel(method)
-	HttpRequestsTotal.WithLabelValues(m, route, statusClass, errorClass).Inc()
-	HttpRequestDuration.WithLabelValues(m, route, statusClass, errorClass).Observe(seconds)
-	HttpRequestSizeBytes.WithLabelValues(m, route, statusClass, errorClass).Observe(reqSize)
-	HttpResponseSizeBytes.WithLabelValues(m, route, statusClass, errorClass).Observe(respSize)
+	cs.httpRequestsTotal.WithLabelValues(m, route, statusClass, errorClass).Inc()
+	cs.httpRequestDuration.WithLabelValues(m, route, statusClass, errorClass).Observe(seconds)
+	if reqSize >= 0 {
+		cs.httpRequestSize.WithLabelValues(m, route, statusClass, errorClass).Observe(reqSize)
+	}
+	if respSize >= 0 {
+		cs.httpResponseSize.WithLabelValues(m, route, statusClass, errorClass).Observe(respSize)
+	}
 }
 
 // RecordHTTPPanic increments platform_http_panics_total.
 func RecordHTTPPanic(method, route string) {
-	if HttpPanicTotal != nil {
-		HttpPanicTotal.WithLabelValues(HTTPMethodLabel(method), route).Inc()
+	if cs := active.Load(); cs != nil {
+		cs.httpPanics.WithLabelValues(HTTPMethodLabel(method), route).Inc()
 	}
 }
 
 // RecordHTTPRateLimited increments platform_http_rate_limited_requests_total.
 func RecordHTTPRateLimited(method, route string) {
-	if RateLimitedRequestsTotal != nil {
-		RateLimitedRequestsTotal.WithLabelValues(HTTPMethodLabel(method), route).Inc()
+	if cs := active.Load(); cs != nil {
+		cs.httpRateLimited.WithLabelValues(HTTPMethodLabel(method), route).Inc()
 	}
 }
 
 // RecordHTTPTimeout increments platform_http_request_timeouts_total when TimeoutMiddleware fires.
 func RecordHTTPTimeout(method, route string) {
-	if HttpRequestTimeoutTotal != nil {
-		HttpRequestTimeoutTotal.WithLabelValues(HTTPMethodLabel(method), route).Inc()
+	if cs := active.Load(); cs != nil {
+		cs.httpTimeouts.WithLabelValues(HTTPMethodLabel(method), route).Inc()
 	}
 }
 
 // GRPCEnabled reports whether the gRPC collectors are registered.
 func GRPCEnabled() bool {
-	return GrpcRequestsTotal != nil && GrpcInflight != nil
+	return active.Load() != nil
 }
 
 // GRPCInflightInc increments platform_grpc_server_inflight_requests for method.
 func GRPCInflightInc(method string) {
-	if GrpcInflight != nil {
-		GrpcInflight.WithLabelValues(method).Inc()
+	if cs := active.Load(); cs != nil {
+		cs.grpcInflight.WithLabelValues(method).Inc()
 	}
 }
 
 // GRPCInflightDec decrements platform_grpc_server_inflight_requests for method.
 func GRPCInflightDec(method string) {
-	if GrpcInflight != nil {
-		GrpcInflight.WithLabelValues(method).Dec()
+	if cs := active.Load(); cs != nil {
+		cs.grpcInflight.WithLabelValues(method).Dec()
 	}
 }
 
 // RecordGRPCPanic increments platform_grpc_panics_total for method.
 func RecordGRPCPanic(method string) {
-	if GrpcPanicTotal != nil {
-		GrpcPanicTotal.WithLabelValues(method).Inc()
+	if cs := active.Load(); cs != nil {
+		cs.grpcPanics.WithLabelValues(method).Inc()
 	}
 }
 
 // RecordGRPCRateLimited increments platform_grpc_rate_limited_requests_total.
 func RecordGRPCRateLimited(method string) {
-	if GrpcRateLimitedRequestsTotal != nil {
-		GrpcRateLimitedRequestsTotal.WithLabelValues(method).Inc()
+	if cs := active.Load(); cs != nil {
+		cs.grpcRateLimited.WithLabelValues(method).Inc()
 	}
 }
 
-// RecordGRPC observes server-side gRPC metrics for one completed RPC.
+// RecordGRPC observes server-side gRPC metrics for one completed RPC. A
+// negative reqSize or respSize (UnknownSize) is not observed.
 func RecordGRPC(
 	method string,
 	durationSeconds float64,
 	grpcCode, statusClass, errorClass string,
 	reqSize, respSize float64,
 ) {
-	if GrpcRequestsTotal == nil {
+	cs := active.Load()
+	if cs == nil {
 		return
 	}
-	GrpcRequestsTotal.WithLabelValues(method, grpcCode, statusClass, errorClass).Inc()
-	GrpcRequestDuration.WithLabelValues(method, statusClass, errorClass).Observe(durationSeconds)
-	GrpcRequestSizeBytes.WithLabelValues(method, statusClass, errorClass).Observe(reqSize)
-	GrpcResponseSizeBytes.WithLabelValues(method, statusClass, errorClass).Observe(respSize)
+	cs.grpcRequestsTotal.WithLabelValues(method, grpcCode, statusClass, errorClass).Inc()
+	cs.grpcRequestDuration.WithLabelValues(method, statusClass, errorClass).Observe(durationSeconds)
+	if reqSize >= 0 {
+		cs.grpcRequestSize.WithLabelValues(method, statusClass, errorClass).Observe(reqSize)
+	}
+	if respSize >= 0 {
+		cs.grpcResponseSize.WithLabelValues(method, statusClass, errorClass).Observe(respSize)
+	}
 }

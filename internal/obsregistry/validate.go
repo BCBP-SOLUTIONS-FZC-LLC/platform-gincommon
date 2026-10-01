@@ -1,8 +1,10 @@
 package obsregistry
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -35,6 +37,8 @@ const (
 	RuleStatus          = "status"
 	RuleDeprecated      = "deprecated"
 	RuleRemoved         = "removed"
+	RuleLabelName       = "label-name"
+	RuleGather          = "gather"
 )
 
 // Finding is one compliance problem with an emitted metric.
@@ -54,6 +58,11 @@ type Options struct {
 	// Strict reports metrics still awaiting registry ratification (status
 	// proposed) as errors instead of warnings.
 	Strict bool
+	// AllowProposedOwners keeps proposed entries owned by these platform
+	// libraries (registry "owner", e.g. "platform-gincommon") as warnings
+	// under Strict, so a service can be strict about everything it emits
+	// itself while a library's own metrics await ratification.
+	AllowProposedOwners []string
 }
 
 // Report is the outcome of validating a set of metric families.
@@ -97,10 +106,19 @@ func (rep *Report) WriteTo(w io.Writer) (int64, error) {
 	return int64(n), err
 }
 
-// ValidateText validates a Prometheus text-format scrape.
+// ValidateText validates a Prometheus text-format (0.0.4) scrape. OpenMetrics
+// text (recognized by its "# EOF" terminator) is normalized to the Prometheus
+// text format first: see openMetricsToText.
 func (r *Registry) ValidateText(rd io.Reader, opts Options) (*Report, error) {
+	data, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, fmt.Errorf("read metrics: %w", err)
+	}
+	if isOpenMetrics(data) {
+		data = openMetricsToText(data)
+	}
 	parser := expfmt.NewTextParser(model.UTF8Validation)
-	fams, err := parser.TextToMetricFamilies(rd)
+	fams, err := parser.TextToMetricFamilies(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("parse metrics: %w", err)
 	}
@@ -118,21 +136,60 @@ func (r *Registry) ValidateFamilies(fams []*dto.MetricFamily, opts Options) *Rep
 	sorted := slices.Clone(fams)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].GetName() < sorted[j].GetName() })
 	rep := &Report{Tiers: make(map[string]Tier, len(sorted))}
-	names := make(map[string]bool, len(sorted))
+	byName := make(map[string]*dto.MetricFamily, len(sorted))
 	for _, f := range sorted {
-		names[f.GetName()] = true
+		byName[f.GetName()] = f
 	}
 	for _, f := range sorted {
 		rep.Checked++
-		// prometheus_client (Python) exposes <metric>_created timestamps as a
-		// separate family; they belong to their parent metric, not a namespace.
-		if base, ok := strings.CutSuffix(f.GetName(), "_created"); ok && (names[base+"_total"] || names[base]) {
+		if isCreatedCompanion(f, byName) {
 			rep.Tiers[f.GetName()] = TierExempt
 			continue
 		}
 		r.validateFamily(rep, f, opts)
 	}
 	return rep
+}
+
+// isCreatedCompanion reports whether f is a prometheus_client (Python)
+// <metric>_created family: a gauge or untyped family X_created whose series
+// carry exactly the label sets of its parent, the counter X_total or the
+// histogram/summary X. Such a family holds the parent's creation timestamps
+// and belongs to the parent, not to a namespace. Anything else named
+// *_created (a counter, or a gauge with its own label sets) is validated as a
+// metric in its own right.
+func isCreatedCompanion(f *dto.MetricFamily, byName map[string]*dto.MetricFamily) bool {
+	base, ok := strings.CutSuffix(f.GetName(), "_created")
+	if !ok || (f.GetType() != dto.MetricType_GAUGE && f.GetType() != dto.MetricType_UNTYPED) {
+		return false
+	}
+	parent := byName[base+"_total"]
+	if parent == nil || parent.GetType() != dto.MetricType_COUNTER {
+		parent = byName[base]
+		if parent == nil {
+			return false
+		}
+		switch parent.GetType() {
+		case dto.MetricType_HISTOGRAM, dto.MetricType_GAUGE_HISTOGRAM, dto.MetricType_SUMMARY:
+		default:
+			return false
+		}
+	}
+	return maps.Equal(labelSets(f), labelSets(parent))
+}
+
+// labelSets returns the set of label-set signatures of f's series.
+func labelSets(f *dto.MetricFamily) map[string]bool {
+	out := make(map[string]bool, len(f.GetMetric()))
+	for _, m := range f.GetMetric() {
+		pairs := make([]string, 0, len(m.GetLabel()))
+		for _, lp := range m.GetLabel() {
+			pairs = append(pairs, lp.GetName()+"\x00"+lp.GetValue())
+		}
+		sort.Strings(pairs)
+		out[strings.Join(pairs, "\x01")] = true
+	}
+	return out
 }
 
 func (r *Registry) validateFamily(rep *Report, f *dto.MetricFamily, opts Options) {
@@ -177,7 +234,7 @@ func (r *Registry) validateFamily(rep *Report, f *dto.MetricFamily, opts Options
 		}
 		if entry.Status == StatusProposed {
 			sev := SeverityWarning
-			if opts.Strict {
+			if opts.Strict && (entry.Owner == "" || !slices.Contains(opts.AllowProposedOwners, entry.Owner)) {
 				sev = SeverityError
 			}
 			add(sev, RuleStatus, "registry entry is proposed and awaits observability governance ratification")
@@ -248,7 +305,12 @@ func (r *Registry) checkLabels(f *dto.MetricFamily, tier Tier, entry *Metric, ad
 			}
 			def := r.Labels[ln]
 			if def == nil {
-				continue // service-owned label on a Tier 3 metric
+				// Service-owned label on a Tier 3 metric: the naming rule
+				// CheckCustom applies at construction, enforced on the scrape.
+				if !labelNameRE.MatchString(ln) {
+					once("labelname:"+ln, SeverityError, RuleLabelName, "label %q must be snake_case [a-z0-9_]", ln)
+				}
+				continue
 			}
 			if !r.allows(entry, ln, lv) {
 				once("value:"+ln+"="+lv, SeverityError, RuleLabelValue, "label %s=%q is outside the vocabulary", ln, lv)

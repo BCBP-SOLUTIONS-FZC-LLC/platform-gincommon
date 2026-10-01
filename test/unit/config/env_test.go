@@ -16,7 +16,6 @@ func TestGetenvHelpers(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "collector:4317")
 	t.Setenv("TEST_SERVICE_NAME", "int-svc")
 	t.Setenv("E2E_SERVICE_NAME", "e2e-svc")
-	t.Setenv("PROMETHEUS_SCRAPE_TARGET", "host:9091")
 
 	if got := config.AppName(); got != "custom-app" {
 		t.Fatalf("AppName() = %q", got)
@@ -44,9 +43,6 @@ func TestGetenvHelpers(t *testing.T) {
 	}
 	if got := config.E2EServiceName(); got != "e2e-svc" {
 		t.Fatalf("E2EServiceName() = %q", got)
-	}
-	if got := config.PrometheusScrapeTarget(); got != "host:9091" {
-		t.Fatalf("PrometheusScrapeTarget() = %q", got)
 	}
 	if got := config.AppAddr(); got != ":9090" {
 		t.Fatalf("AppAddr() = %q", got)

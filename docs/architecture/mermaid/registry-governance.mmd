@@ -1,0 +1,41 @@
+graph LR
+    subgraph sources["Contract sources"]
+        events_reg["platform-events released registry<br/>(imported verbatim — wins on conflict)"]
+        pg_reg["platform-pgcommon released registry<br/>(imported verbatim — wins on conflict)"]
+        own["gincommon entries<br/>platform_http_* · platform_grpc_* · platform_build_info<br/>status proposed, pending governance"]
+    end
+
+    subgraph registry["internal/obsregistry/registry.json — embedded, 110 entries"]
+        entries["metrics: 5 approved · 48 proposed · 57 removed (legacy, with replacements)<br/>labels: vocabulary, patterns, max_values, cardinality<br/>prohibited labels (tenant_id, user_id, ...)<br/>bucket presets · owners · governance_notes"]
+        parse["Parse: strict — unknown fields, duplicates,<br/>undefined labels/buckets, legacy without replacement"]
+    end
+
+    subgraph runtime["Runtime (in every consuming service)"]
+        builder["registryBuilder → platform_* collectors<br/>(code cannot drift from the contract)"]
+        shared["NewShared{Counter,Gauge,Histogram}Vec(reg, name)<br/>Tier 1/2 from the entry"]
+        custom["New{Counter,Gauge,Histogram}Vec — Tier 3<br/>CheckCustom: domain_service_ prefix, suffixes,<br/>no prohibited / injected labels, not a registry or legacy name"]
+    end
+
+    subgraph ci["CI enforcement"]
+        validate["obsregistry.Validate(gatherer, opts) in service tests<br/>namespace · naming · suffixes · required labels ·<br/>registry compliance · label vocabulary · cardinality · gather errors"]
+        check["metricslint check -url / files (text or OpenMetrics)<br/>-strict · -allow-proposed-owner list"]
+        refs["metricslint refs dashboards/ rules/ slo/ hpa/<br/>legacy + unregistered names (skips .git, node_modules, vendor;<br/>64 MiB per file; I/O problems → exit 2)"]
+        inv["metricslint inventory → docs/observability/metric-registry.md<br/>make metrics-lint: drift check + promtool check/test rules"]
+    end
+
+    subgraph mirrors["Mirrors"]
+        fastapi["platform-fastapicommon (Python)<br/>vendored copy — re-copy on every change"]
+    end
+
+    events_reg --> entries
+    pg_reg --> entries
+    own --> entries
+    entries --> parse
+    parse --> builder
+    parse --> shared
+    parse --> custom
+    parse --> validate
+    parse --> check
+    parse --> refs
+    parse --> inv
+    entries -.->|"copied"| fastapi

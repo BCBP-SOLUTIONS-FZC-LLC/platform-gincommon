@@ -1,48 +1,58 @@
 sequenceDiagram
-    participant Client as gRPC Client
+    participant Client as gRPC client
     participant PR as PanicRecovery
     participant RI as RequestID
     participant TR as Tracing
     participant ME as Metrics
     participant LO as Logging
     participant AU as RequireAuth
-    participant CM as ContextInterceptor
-    participant H as gRPC Handler
+    participant CM as Context
+    participant TO as Timeout (innermost)
+    participant H as Handler
 
-    Note over PR,CM: Registered via FullUnaryInterceptors(cfg)\nmetrics.Init called once (sync.Once)
+    Note over PR,CM: FullUnaryInterceptors(cfg) = Observability* + Protected*<br/>append TimeoutUnaryInterceptor(d) LAST so observability sees its result
 
-    Client ->>+ PR: Unary RPC call
-    Note over PR: defer recover() → codes.Internal on panic
+    Client ->>+ PR: RPC + metadata (traceparent, x-request-id, identity)
+    Note over PR: defer recover() → codes.Internal "internal server error"
 
     PR ->>+ RI: next
-    Note over RI: read/generate x-request-id\nstore in Go context
+    Note over RI: read or generate x-request-id<br/>grpc.SetHeader echoes it to the client
 
     RI ->>+ TR: next
-    Note over TR: extract traceparent\nstart OTel server span (scope=ServiceName)
+    Note over TR: extract traceparent from metadata (global propagator)<br/>span name = bounded grpc_method (unknown → rpc.method=_OTHER)
 
     TR ->>+ ME: next
-    Note over ME: record grpc_server_inflight_requests +1\ndefer: observe duration + sizes
+    Note over ME: platform_grpc_server_inflight_requests +1
 
     ME ->>+ LO: next
-    Note over LO: defer: structured grpc_request log\nInfo(OK) / Warn(client) / Error(server)
+    Note over LO: installs identity holder in ctx
 
     LO ->>+ AU: next
-    alt missing x-user-id or x-tenant-id
-        AU -->> Client: codes.Unauthenticated
-    else metadata valid
+    alt health method: exactly /grpc.health.v1.Health/Check, Watch or List
+        AU ->> H: bypass auth, context and RBAC
+    else missing, blank or REPEATED x-user-id / x-tenant-id
+        AU -->> LO: codes.Unauthenticated (missing / blank / ambiguous)
+    else identity valid
         AU ->>+ CM: next
-        Note over CM: build RequestContext{UserID,TenantID,Roles,ClientIP}\nstore in Go context via domain.ContextWithRequestContext
-
-        CM ->>+ H: next
-        H -->>- CM: response, error
+        alt roles over 4096 bytes or 64 roles (ParseRolesStrict)
+            CM -->> AU: codes.Unauthenticated "invalid tenant roles"
+        else ok
+            Note over CM: RequestContext (TraceID from active span)<br/>fill the logging holder with verified identity
+            CM ->>+ TO: next
+            Note over TO: cap deadline at d (earlier client deadline kept)
+            TO ->>+ H: unary: inline · stream: handler goroutine
+            H -->>- TO: response, error
+            TO -->>- CM: result, or DeadlineExceeded at the cap
+        end
         CM -->>- AU: return
-        AU -->>- LO: return
     end
+    AU -->>- LO: return
 
     LO -->>- ME: return
-    Note over LO: grpc_request log written
+    Note over LO: grpc_request log — Info OK · Warn client codes (incl. DeadlineExceeded) · Error server codes<br/>code via grpcStatus: status.FromError, else status.FromContextError
     ME -->>- TR: return
-    Note over ME: metrics observed
+    Note over ME: handled_total{grpc_method, grpc_code, status_class, error_class} · duration · sizes
     TR -->>- RI: return
+    Note over TR: rpc.response.status_code (e.g. CANCELLED) + rpc.grpc.status_code<br/>span status Error for any non-nil error
     RI -->>- PR: return
-    PR -->>- Client: response
+    PR -->>- Client: response + x-request-id header

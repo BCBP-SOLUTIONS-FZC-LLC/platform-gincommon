@@ -2,51 +2,39 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelcodes "go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 )
+
+// rpcMethodOther is the semconv rpc.method value for methods the server does not recognise.
+const rpcMethodOther = "_OTHER"
+
+// legacyGRPCStatusCodeKey is the pre-1.40 semconv integer attribute (still emitted by
+// otelgrpc and keyed on by many Tempo/Jaeger dashboards) kept alongside
+// rpc.response.status_code.
+const legacyGRPCStatusCodeKey = attribute.Key("rpc.grpc.status_code")
 
 // UnaryTracingInterceptor extracts W3C traceparent from gRPC metadata and starts an OTel server span.
 func UnaryTracingInterceptor(serviceName string) grpc.UnaryServerInterceptor {
-	scope := serviceName
-	if scope == "" {
-		scope = "platform-gincommon/grpc"
-	}
+	scope := tracingScope(serviceName)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
-		ctx = extractTraceContext(ctx)
-		tracer := otel.Tracer(scope)
-		svc, method := splitFullMethod(info.FullMethod)
-		ctx, span := tracer.Start(ctx, info.FullMethod, trace.WithSpanKind(trace.SpanKindServer))
-		span.SetAttributes(
-			semconv.RPCSystemNameGRPC,
-			attribute.String("rpc.service", svc),
-			semconv.RPCMethodKey.String(method),
-		)
+		ctx, span := startServerSpan(extractTraceContext(ctx), scope, info.FullMethod)
 
 		var panicValue any
 		// Outer defer: finalise span attributes after handler and inner defer complete.
-		defer func() {
-			if panicValue != nil {
-				// Record the actual panic value so Tempo/Jaeger show the real message.
-				span.RecordError(fmt.Errorf("%v", panicValue))
-				span.SetStatus(otelcodes.Error, "panic")
-			} else if err != nil {
-				span.RecordError(err)
-				// RecordError alone does not change span status per OTel spec; set it
-				// explicitly so Tempo/Jaeger mark non-OK gRPC responses as errors.
-				span.SetStatus(otelcodes.Error, status.Convert(err).Message())
-			}
-			span.End()
-		}()
+		defer func() { finishServerSpan(span, panicValue, err) }()
 		// Inner defer: capture panic value then re-panic so UnaryPanicRecoveryInterceptor
 		// (outer in the chain) can still catch and convert it to codes.Internal.
 		defer func() {
@@ -63,32 +51,12 @@ func UnaryTracingInterceptor(serviceName string) grpc.UnaryServerInterceptor {
 
 // StreamTracingInterceptor extracts W3C traceparent from gRPC metadata and starts an OTel server span.
 func StreamTracingInterceptor(serviceName string) grpc.StreamServerInterceptor {
-	scope := serviceName
-	if scope == "" {
-		scope = "platform-gincommon/grpc"
-	}
+	scope := tracingScope(serviceName)
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
-		ctx := extractTraceContext(ss.Context())
-		tracer := otel.Tracer(scope)
-		svc, method := splitFullMethod(info.FullMethod)
-		ctx, span := tracer.Start(ctx, info.FullMethod, trace.WithSpanKind(trace.SpanKindServer))
-		span.SetAttributes(
-			semconv.RPCSystemNameGRPC,
-			attribute.String("rpc.service", svc),
-			semconv.RPCMethodKey.String(method),
-		)
+		ctx, span := startServerSpan(extractTraceContext(ss.Context()), scope, info.FullMethod)
 
 		var panicValue any
-		defer func() {
-			if panicValue != nil {
-				span.RecordError(fmt.Errorf("%v", panicValue))
-				span.SetStatus(otelcodes.Error, "panic")
-			} else if err != nil {
-				span.RecordError(err)
-				span.SetStatus(otelcodes.Error, status.Convert(err).Message())
-			}
-			span.End()
-		}()
+		defer func() { finishServerSpan(span, panicValue, err) }()
 		defer func() {
 			if r := recover(); r != nil {
 				panicValue = r
@@ -98,6 +66,64 @@ func StreamTracingInterceptor(serviceName string) grpc.StreamServerInterceptor {
 
 		err = handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
 		return
+	}
+}
+
+func tracingScope(serviceName string) string {
+	if serviceName == "" {
+		return "platform-gincommon/grpc"
+	}
+	return serviceName
+}
+
+// startServerSpan starts a server span named after the bounded method label, so an
+// attacker-chosen method (grpc.UnknownServiceHandler) cannot explode span-name
+// cardinality. Unrecognised methods follow semconv: rpc.method="_OTHER" plus a
+// sanitized, length-capped rpc.method_original.
+func startServerSpan(ctx context.Context, scope, fullMethod string) (context.Context, trace.Span) {
+	name := label.GRPCMethod(fullMethod)
+	ctx, span := otel.Tracer(scope).Start(ctx, name, trace.WithSpanKind(trace.SpanKindServer))
+	if name == label.Unknown {
+		span.SetAttributes(
+			semconv.RPCSystemNameGRPC,
+			semconv.RPCMethodKey.String(rpcMethodOther),
+			semconv.RPCMethodOriginalKey.String(service.SanitizeString(fullMethod)),
+		)
+		return ctx, span
+	}
+	svc, method := splitFullMethod(name)
+	span.SetAttributes(
+		semconv.RPCSystemNameGRPC,
+		attribute.String("rpc.service", svc),
+		semconv.RPCMethodKey.String(method),
+	)
+	return ctx, span
+}
+
+// finishServerSpan records the wire status code (rpc.response.status_code and the
+// legacy rpc.grpc.status_code) and error status, then ends the span.
+func finishServerSpan(span trace.Span, panicValue any, err error) {
+	defer span.End()
+	if panicValue != nil {
+		span.SetAttributes(
+			semconv.RPCResponseStatusCodeKey.String(statusCodeName(codes.Internal)),
+			legacyGRPCStatusCodeKey.Int(int(codes.Internal)),
+		)
+		// Record the actual panic value so Tempo/Jaeger show the real message.
+		span.RecordError(errors.New(service.SanitizeString(fmt.Sprint(panicValue))))
+		span.SetStatus(otelcodes.Error, "panic")
+		return
+	}
+	st := grpcStatus(err)
+	span.SetAttributes(
+		semconv.RPCResponseStatusCodeKey.String(statusCodeName(st.Code())),
+		legacyGRPCStatusCodeKey.Int(int(st.Code())),
+	)
+	if err != nil {
+		span.RecordError(err)
+		// RecordError alone does not change span status per OTel spec; set it
+		// explicitly so Tempo/Jaeger mark non-OK gRPC responses as errors.
+		span.SetStatus(otelcodes.Error, st.Message())
 	}
 }
 
@@ -115,7 +141,7 @@ func splitFullMethod(full string) (service, method string) {
 	return "", s // no slash — entire string is the method name
 }
 
-// metadataCarrier adapts gRPC incoming metadata to OTel TextMapCarrier.
+// metadataCarrier adapts gRPC metadata to OTel TextMapCarrier.
 type metadataCarrier metadata.MD
 
 func (mc metadataCarrier) Get(key string) string {

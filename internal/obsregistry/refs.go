@@ -2,10 +2,12 @@ package obsregistry
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 // Reference is a metric name found in a dashboard, alert, recording rule,
@@ -23,6 +25,23 @@ func (ref Reference) String() string {
 	return fmt.Sprintf("%s:%d: %s: %s", ref.File, ref.Line, ref.Severity, ref.Message)
 }
 
+// ErrReferenceFileTooLarge is returned by ScanReferences for input larger
+// than the per-file cap (64 MiB, the same bound as a fetched scrape).
+var ErrReferenceFileTooLarge = errors.New("file exceeds the reference scan size limit")
+
+// maxReferenceFileBytes is the per-file ScanReferences cap.
+var maxReferenceFileBytes atomic.Int64
+
+func init() { maxReferenceFileBytes.Store(maxScrapeBytes) }
+
+// SetMaxReferenceFileBytesForTesting lowers the ScanReferences per-file cap so
+// tests need not build 64 MiB inputs, and returns a func restoring the
+// previous cap. This package is internal; consuming services cannot reach it.
+func SetMaxReferenceFileBytesForTesting(n int64) (restore func()) {
+	prev := maxReferenceFileBytes.Swap(n)
+	return func() { maxReferenceFileBytes.Store(prev) }
+}
+
 var identRE = regexp.MustCompile(`[A-Za-z_:][A-Za-z0-9_:]*`)
 
 // histogramSeriesSuffixes are the per-series suffixes a histogram exposes.
@@ -32,13 +51,32 @@ var histogramSeriesSuffixes = []string{"_bucket", "_sum", "_count"}
 // their replacement) or claim the platform_ namespace without a registry
 // entry. file labels the results. Recording-rule names (containing ':') are
 // skipped; their inputs are what is checked.
+//
+// Input beyond 64 MiB is not read: ScanReferences returns the references found
+// so far and an error wrapping ErrReferenceFileTooLarge, so a huge
+// newline-free file cannot exhaust memory. Lines are otherwise unbounded.
 func (r *Registry) ScanReferences(file string, rd io.Reader) ([]Reference, error) {
 	var refs []Reference
-	sc := bufio.NewScanner(rd)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for line := 1; sc.Scan(); line++ {
+	limit := maxReferenceFileBytes.Load()
+	// bufio.Reader rather than Scanner: minified dashboard JSON can put
+	// megabytes on one line, and a Scanner fails such lines with ErrTooLong.
+	// The LimitReader (one byte past the cap, to detect overflow) bounds what
+	// a single ReadString can buffer.
+	br := bufio.NewReader(io.LimitReader(rd, limit+1))
+	var total int64
+	for line := 1; ; line++ {
+		text, err := br.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return refs, fmt.Errorf("scan %s: %w", file, err)
+		}
+		if total += int64(len(text)); total > limit {
+			return refs, fmt.Errorf("scan %s: %w (%d bytes)", file, ErrReferenceFileTooLarge, limit)
+		}
+		if text == "" && err == io.EOF {
+			return refs, nil
+		}
 		seen := map[string]bool{}
-		for _, tok := range identRE.FindAllString(sc.Text(), -1) {
+		for _, tok := range identRE.FindAllString(text, -1) {
 			// Metric names never contain ':' (recording rules) or end in '_' (prose such as "platform_*").
 			if strings.Contains(tok, ":") || strings.HasSuffix(tok, "_") || seen[tok] {
 				continue
@@ -49,11 +87,10 @@ func (r *Registry) ScanReferences(file string, rd io.Reader) ([]Reference, error
 				refs = append(refs, ref)
 			}
 		}
+		if err == io.EOF {
+			return refs, nil
+		}
 	}
-	if err := sc.Err(); err != nil {
-		return refs, fmt.Errorf("scan %s: %w", file, err)
-	}
-	return refs, nil
 }
 
 func (r *Registry) checkReference(tok string) (Reference, bool) {

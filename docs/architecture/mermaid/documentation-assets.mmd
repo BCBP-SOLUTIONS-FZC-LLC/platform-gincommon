@@ -1,30 +1,31 @@
 graph LR
     subgraph sources["Documentation sources"]
-        subgraph godoc_src["GoDoc  —  pkg/*/"]
-            doc_go["doc.go × 3\npackage overview prose\n(entry point for pkgsite)"]
-            sym["exported symbol comments\nevery func · type · method\n(enforced by revive linter)"]
-        end
-
-        subgraph arch_src["Architecture docs"]
-            mmd_files["docs/architecture/mermaid/\n10 × .mmd source diagrams"]
-            arch_md["ARCHITECTURE.md\nembeds mermaid blocks\n+ prose + symbol tables"]
-        end
-
-        subgraph claude_src["Claude Code guidance"]
-            claude_md[".claude/CLAUDE.md\ncommands · architecture\nAPI reference · test layout\nextending the library"]
-        end
+        mmd["docs/architecture/mermaid/<br/>15 × .mmd source diagrams"]
+        arch["ARCHITECTURE.md<br/>embeds every .mmd verbatim + prose"]
+        readme["README.md<br/>mental model · API overview · integration · operations"]
+        obsdocs["docs/observability/<br/>standard · metric-registry.md (generated) · migration · runbooks"]
+        godoc["pkg/gincommon/doc.go + exported symbol comments<br/>(revive linter)"]
+        claude[".claude/CLAUDE.md<br/>design decisions and invariants"]
+        policy["VERSIONING.md · CHANGELOG.md · SECURITY.md · CONTRIBUTING.md"]
     end
 
     subgraph rendered["Rendered / consumed by"]
-        pkgsite["pkgsite (local)\nmake godoc → localhost:8080"]
-        github_md["GitHub\nMarkdown + Mermaid preview"]
-        ide["IDE hover\ngo doc CLI"]
-        claude_ai["Claude Code\ncontext-aware coding assistance"]
+        github["GitHub — Markdown + Mermaid"]
+        ide["IDE Mermaid preview · go doc"]
+        live["mermaid.live"]
+        pkgsite["make godoc → pkgsite :8080"]
+        claude_ai["Claude Code"]
+        lint["make metrics-lint — inventory drift gate"]
     end
 
-    doc_go  --> pkgsite
-    sym     --> pkgsite
-    sym     --> ide
-    mmd_files -->|"copied into\nfenced code blocks"| arch_md
-    arch_md --> github_md
-    claude_md --> claude_ai
+    mmd -->|"embedded as fenced blocks"| arch
+    arch --> github
+    mmd --> ide
+    mmd --> live
+    readme --> github
+    obsdocs --> github
+    obsdocs --> lint
+    godoc --> pkgsite
+    godoc --> ide
+    claude --> claude_ai
+    policy --> github

@@ -107,7 +107,8 @@ func TestRun_CustomRegistry(t *testing.T) {
 	if code, _, stderr := run(t, "", "registry", "-registry", bad); code != 1 || !strings.Contains(stderr, "schema_version") {
 		t.Errorf("registry bad: code %d %s", code, stderr)
 	}
-	if code, _, _ := run(t, "", "registry", "-registry", filepath.Join(dir, "missing.json")); code != 1 {
+	// A missing file is an I/O error (2), unlike an invalid document (1).
+	if code, _, _ := run(t, "", "registry", "-registry", filepath.Join(dir, "missing.json")); code != 2 {
 		t.Errorf("registry missing: code %d", code)
 	}
 }
@@ -153,8 +154,12 @@ func TestRun_RefsUnreadable(t *testing.T) {
 	if _, err := os.ReadFile(p); err == nil {
 		t.Skip("file still readable (running as root)")
 	}
-	if code, _, _ := run(t, "", "refs", dir); code != 2 {
-		t.Errorf("unreadable in dir: code %d", code)
+	// Inside a walked directory: an error finding, the walk continues, and
+	// the exit code is 2 (I/O error) after every finding is printed.
+	writeFile(t, dir, "y.yml", "expr: rate(http_requests_total[5m])\n")
+	if code, stdout, _ := run(t, "", "refs", dir); code != 2 || !strings.Contains(stdout, "x.yml:0: error: cannot read") ||
+		!strings.Contains(stdout, "y.yml:1: error") {
+		t.Errorf("unreadable in dir: code %d\n%s", code, stdout)
 	}
 	if code, _, _ := run(t, "", "refs", p); code != 2 {
 		t.Errorf("unreadable file: code %d", code)

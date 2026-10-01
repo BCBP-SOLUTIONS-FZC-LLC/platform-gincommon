@@ -35,10 +35,10 @@ func TestNewRouter_Health(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
-	if w.Header().Get("X-Trace-Id") == "" {
+	if w.Result().Header.Get("X-Trace-Id") == "" {
 		t.Fatal("expected X-Trace-Id on /health response")
 	}
-	if w.Header().Get("X-Request-Id") == "" {
+	if w.Result().Header.Get("X-Request-Id") == "" {
 		t.Fatal("expected X-Request-Id on /health response")
 	}
 }
@@ -60,13 +60,13 @@ func TestNewRouter_MetricsWithoutAuth(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
-	if ct := w.Header().Get("Content-Type"); ct == "" {
+	if ct := w.Result().Header.Get("Content-Type"); ct == "" {
 		t.Fatal("expected Content-Type on metrics response")
 	}
-	if w.Header().Get("X-Trace-Id") == "" {
+	if w.Result().Header.Get("X-Trace-Id") == "" {
 		t.Fatal("expected X-Trace-Id on /metrics response")
 	}
-	if w.Header().Get("X-Request-Id") == "" {
+	if w.Result().Header.Get("X-Request-Id") == "" {
 		t.Fatal("expected X-Request-Id on /metrics response")
 	}
 }
@@ -90,7 +90,7 @@ func TestNewRouter_Panic_Returns500WithCorrelation(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
-	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+	if ct := w.Result().Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Fatalf("Content-Type = %q, want JSON", ct)
 	}
 
@@ -98,7 +98,7 @@ func TestNewRouter_Panic_Returns500WithCorrelation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.Error != http.StatusText(http.StatusInternalServerError) {
+	if body.Error != "internal server error" {
 		t.Fatalf("error = %q", body.Error)
 	}
 	if body.Status != http.StatusInternalServerError {
@@ -107,14 +107,14 @@ func TestNewRouter_Panic_Returns500WithCorrelation(t *testing.T) {
 	if body.RequestID == "" {
 		t.Fatal("expected non-empty request_id in body")
 	}
-	if body.RequestID != w.Header().Get("X-Request-Id") {
-		t.Fatalf("body request_id %q != header %q", body.RequestID, w.Header().Get("X-Request-Id"))
+	if body.RequestID != w.Result().Header.Get("X-Request-Id") {
+		t.Fatalf("body request_id %q != header %q", body.RequestID, w.Result().Header.Get("X-Request-Id"))
 	}
 	if body.TraceID == "" || body.TraceID == "00000000000000000000000000000000" {
 		t.Fatalf("trace_id = %q, want non-zero OTel trace ID", body.TraceID)
 	}
-	if body.TraceID != w.Header().Get("X-Trace-Id") {
-		t.Fatalf("body trace_id %q != header %q", body.TraceID, w.Header().Get("X-Trace-Id"))
+	if body.TraceID != w.Result().Header.Get("X-Trace-Id") {
+		t.Fatalf("body trace_id %q != header %q", body.TraceID, w.Result().Header.Get("X-Trace-Id"))
 	}
 
 	counter, err := metrics.HttpPanicTotal.GetMetricWithLabelValues(http.MethodGet, "/panic")

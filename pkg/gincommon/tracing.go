@@ -26,7 +26,10 @@ type Span = trace.Span
 
 // NewTracer returns a tracer for scope (typically the service name) from the
 // TracerProvider installed by InitTracing. Before InitTracing runs it returns
-// OpenTelemetry's default no-op tracer.
+// OpenTelemetry's default no-op tracer. The tracer follows later provider
+// replacements (ObservabilityMiddlewares replacing the provisional
+// unknown_service provider, a second InitTracing): its spans always go to the
+// provider that is current when they start.
 func NewTracer(scope string) Tracer {
 	return otel.Tracer(scope)
 }

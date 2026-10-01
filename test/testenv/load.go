@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 
 	"github.com/joho/godotenv"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 )
 
 // Defaults for the required observability identity. gincommon panics at startup
@@ -24,6 +26,10 @@ func init() {
 	}
 	setDefault("OBSERVABILITY_DOMAIN", DefaultDomain)
 	setDefault("ENVIRONMENT", DefaultEnvironment)
+	// Test packages build many stacks with different service names in one
+	// process; keep the first metrics identity instead of panicking with
+	// ErrIdentityMismatch. Tests of the mismatch check turn it back on.
+	metrics.AllowIdentityChangeForTesting(true)
 }
 
 func setDefault(key, value string) {

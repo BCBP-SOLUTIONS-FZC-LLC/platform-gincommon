@@ -9,7 +9,7 @@ import (
 // MetricsRegisterer returns the prometheus.Registerer gincommon's own HTTP metrics are
 // registered to. Register custom application collectors here (not
 // prometheus.DefaultRegisterer directly) so they stay consistent with tests that use an
-// isolated registry via metrics.InitWithRegisterer. Call after ObservabilityMiddlewares
+// isolated registry via metrics.InitWithRegistererOptions. Call after ObservabilityMiddlewares
 // or DefaultMiddlewares has run.
 func MetricsRegisterer() prometheus.Registerer {
 	return metrics.Registerer()

@@ -20,7 +20,9 @@ func TestCorrelationHeadersMiddleware_SetsHeadersOnSuccess(t *testing.T) {
 		middleware.TracingMiddleware(""),
 		middleware.CorrelationHeadersMiddleware(),
 	)
-	r.GET("/ok", func(c *gin.Context) { c.Status(http.StatusOK) })
+	// The handler writes a body, so headers are flushed with it: any header set after
+	// c.Next() would not reach the client (only w.Result().Header shows that).
+	r.GET("/ok", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	req := httptest.NewRequest(http.MethodGet, "/ok", nil)
 	w := httptest.NewRecorder()
@@ -29,13 +31,13 @@ func TestCorrelationHeadersMiddleware_SetsHeadersOnSuccess(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if w.Header().Get("X-Request-Id") == "" {
+	if w.Result().Header.Get("X-Request-Id") == "" {
 		t.Fatal("expected X-Request-Id on success response")
 	}
-	if w.Header().Get("X-Trace-Id") == "" {
+	if w.Result().Header.Get("X-Trace-Id") == "" {
 		t.Fatal("expected X-Trace-Id on success response")
 	}
-	if w.Header().Get("x-request-id") == "" {
+	if w.Result().Header.Get("x-request-id") == "" {
 		t.Fatal("expected x-request-id on success response")
 	}
 }
@@ -63,7 +65,7 @@ func TestWriteJSONError_ViaRecovery_IncludesCorrelationFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Error != http.StatusText(http.StatusInternalServerError) {
+	if body.Error != "internal server error" {
 		t.Fatalf("error = %q", body.Error)
 	}
 	if body.Status != http.StatusInternalServerError {

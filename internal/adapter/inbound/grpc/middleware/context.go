@@ -19,6 +19,9 @@ import (
 // in the context via domain.ContextWithRequestContext. Requires UnaryRequireAuthInterceptor first.
 func UnaryContextInterceptor(ctxSvc port.ContextBuilder) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if info != nil && isHealthMethod(info.FullMethod) {
+			return handler(ctx, req) // health probes carry no identity
+		}
 		ctx, err := injectRequestContext(ctx, ctxSvc)
 		if err != nil {
 			return nil, err
@@ -30,6 +33,9 @@ func UnaryContextInterceptor(ctxSvc port.ContextBuilder) grpc.UnaryServerInterce
 // StreamContextInterceptor builds a domain.RequestContext and stores it in the stream context.
 func StreamContextInterceptor(ctxSvc port.ContextBuilder) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if info != nil && isHealthMethod(info.FullMethod) {
+			return handler(srv, ss) // health probes carry no identity
+		}
 		ctx, err := injectRequestContext(ss.Context(), ctxSvc)
 		if err != nil {
 			return err
@@ -45,13 +51,24 @@ func injectRequestContext(ctx context.Context, ctxSvc port.ContextBuilder) (cont
 		return ctx, status.Error(codes.Unauthenticated, "missing metadata")
 	}
 
+	// Same rule as RequireAuth, enforced here too so a chain without RequireAuth
+	// cannot build a RequestContext from an ambiguous identity.
+	if err := checkSingleIdentityMeta(md); err != nil {
+		return ctx, err
+	}
+
 	userID := getFirstMeta(md, MetaUserID)
 	tenantID := getFirstMeta(md, MetaTenantID)
 	// Join all repeated metadata entries before parsing — gRPC gateways may send
 	// roles as multiple entries ("x-tenant-roles: admin", "x-tenant-roles: editor")
 	// rather than a single comma-separated value. strings.Join produces the same
-	// comma-separated string that domain.ParseRoles expects.
-	roles := domain.ParseRoles(strings.Join(md.Get(MetaTenantRoles), ","))
+	// comma-separated string the HTTP path parses. ParseRolesStrict (as on HTTP)
+	// rejects over-limit input with Unauthenticated instead of silently dropping
+	// every role; individually invalid tokens are still dropped.
+	roles, err := domain.ParseRolesStrict(strings.Join(md.Get(MetaTenantRoles), ","))
+	if err != nil {
+		return ctx, status.Error(codes.Unauthenticated, "invalid tenant roles")
+	}
 	// Extract trace ID from the active OTel span — UnaryTracingInterceptor (if present)
 	// has already called tracer.Start, so SpanFromContext returns the active span.
 	traceID := ""
@@ -74,6 +91,8 @@ func injectRequestContext(ctx context.Context, ctxSvc port.ContextBuilder) (cont
 		}
 	}
 
+	// Hand the verified identity to an outer logging interceptor (see identityHolder).
+	recordIdentity(ctx, rc)
 	return domain.ContextWithRequestContext(ctx, rc), nil
 }
 

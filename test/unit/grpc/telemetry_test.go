@@ -21,6 +21,8 @@ func TestObservabilityInterceptors_WithTracingOverrides(t *testing.T) {
 			Insecure:      &insecure,
 			SampleRatio:   &ratio,
 			EnableBaggage: &baggage,
+			// Also exercises the remote-parent sampling override.
+			IgnoreRemoteParentSampled: &insecure,
 		},
 	}
 

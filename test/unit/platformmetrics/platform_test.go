@@ -133,20 +133,110 @@ func TestLibraryMetrics_ComplyWithStandard(t *testing.T) {
 	}
 }
 
-func TestBeforeInit_NothingRecordedNoPanic(t *testing.T) {
+// The exported collector vars are a read-only view: recorders use the
+// atomically published set, so clobbering a var cannot disable (or race with)
+// recording. Pre-initialization no-ops are pinned in test/unit/uninit.
+func TestRecordersIgnoreExportedVars(t *testing.T) {
 	reg := initPlatform(t, iamOpts)
-	// Nil collectors (as before initialization) make every recorder a no-op.
 	prevHTTP, prevActive := metrics.HttpRequestsTotal, metrics.HttpActiveRequests
 	metrics.HttpRequestsTotal, metrics.HttpActiveRequests = nil, nil
 	defer func() { metrics.HttpRequestsTotal, metrics.HttpActiveRequests = prevHTTP, prevActive }()
-	if metrics.HTTPEnabled() {
-		t.Fatal("HTTPEnabled must be false without collectors")
+	if !metrics.HTTPEnabled() || !metrics.GRPCEnabled() {
+		t.Fatal("enabled state follows the published set, not the exported vars")
 	}
 	metrics.RecordHTTP("GET", "/x", "2xx", "success", 0.1, 0, 0)
 	metrics.HTTPActiveInc("/x")
 	metrics.HTTPActiveDec("/x")
-	if strings.Contains(scrape(t, reg), `route="/x"`) {
-		t.Error("nothing may be recorded through nil collectors")
+	if !strings.Contains(scrape(t, reg), `route="/x"`) {
+		t.Error("recording must not depend on the exported vars")
+	}
+}
+
+func TestUnknownSizesAreNotObserved(t *testing.T) {
+	reg := initPlatform(t, iamOpts)
+	metrics.RecordHTTP("POST", "/chunked", "2xx", "success", 0.1, metrics.RequestBodySize(-1), 10)
+	metrics.RecordGRPC("/a.B/C", 0.1, "OK", "2xx", "success", metrics.UnknownSize, metrics.UnknownSize)
+	counts := map[string]uint64{}
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		for _, m := range f.GetMetric() {
+			if h := m.GetHistogram(); h != nil {
+				counts[f.GetName()] += h.GetSampleCount()
+			}
+		}
+	}
+	for name, want := range map[string]uint64{
+		"platform_http_request_size_bytes":         0,
+		"platform_http_response_size_bytes":        1,
+		"platform_http_request_duration_seconds":   1,
+		"platform_grpc_server_request_size_bytes":  0,
+		"platform_grpc_server_response_size_bytes": 0,
+		"platform_grpc_server_handling_seconds":    1,
+	} {
+		if counts[name] != want {
+			t.Errorf("%s sample count = %d, want %d", name, counts[name], want)
+		}
+	}
+}
+
+// Re-initialization (tests) while requests are being recorded must be
+// race-free: run with -race.
+func TestRecordingConcurrentWithReinit(t *testing.T) {
+	initPlatform(t, iamOpts)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			metrics.RecordHTTP("GET", "/r", "2xx", "success", 0.01, 1, 1)
+			metrics.HTTPActiveInc("/r")
+			metrics.HTTPActiveDec("/r")
+			metrics.RecordGRPC("/a.B/C", 0.01, "OK", "2xx", "success", 1, 1)
+			_ = metrics.ConstLabels()
+			_, _ = metrics.Identity()
+		}
+	}()
+	for range 20 {
+		initPlatform(t, iamOpts)
+	}
+	<-done
+}
+
+func TestFailedRegistrationRollsBack(t *testing.T) {
+	initPlatform(t, iamOpts)
+	reg := prometheus.NewRegistry()
+	// Identical shape (AlreadyRegisteredError): a registry remembers a name's
+	// help and labels even after Unregister.
+	m, _ := obsregistry.Default().Lookup("platform_http_panics_total")
+	conflict := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: m.Name, Help: m.Help,
+		ConstLabels: prometheus.Labels{"domain": "iam", "environment": "test", "service": "rollback-svc"},
+	}, m.Labels)
+	reg.MustRegister(conflict)
+	other := metrics.Options{ServiceName: "rollback-svc", Domain: "iam", Environment: "test"}
+	if err := metrics.InitWithRegistererOptions(other, reg); err == nil || !strings.Contains(err.Error(), "register collectors") {
+		t.Fatalf("want a registration error, got %v", err)
+	}
+	if _, s := metrics.Identity(); s != "event-consumer" {
+		t.Errorf("a failed init must keep the previous collectors active; Identity service = %q", s)
+	}
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The conflicting vec has no children, so anything gathered (e.g.
+	// platform_build_info, always 1) was left behind by the failed init.
+	for _, f := range fams {
+		t.Errorf("%s left on the registry after a failed init", f.GetName())
+	}
+	reg.Unregister(conflict)
+	if err := metrics.InitWithRegistererOptions(other, reg); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if _, s := metrics.Identity(); s != "rollback-svc" {
+		t.Errorf("Identity service = %q after retry", s)
 	}
 }
 
@@ -181,6 +271,9 @@ func TestOptionsValidation(t *testing.T) {
 		{metrics.Options{ServiceName: "s1", Domain: "iam", Environment: "qa"}, "environment"},
 		{metrics.Options{ServiceName: "s1", Domain: "iam", Environment: "production"}, "environment"},
 		{metrics.Options{ServiceName: "s1", Domain: "iam"}, "environment"},
+		// Versions are sanitised, not rejected; only nothing usable fails.
+		{metrics.Options{ServiceName: "s1", Domain: "iam", Environment: "prod", BuildVersion: "///"}, "build version"},
+		{metrics.Options{ServiceName: "s1", Domain: "iam", Environment: "prod", BuildVersion: "refs/tags/"}, "build version"},
 	} {
 		if err := metrics.InitWithRegistererOptions(tc.opts, prometheus.NewRegistry()); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("InitWithRegistererOptions(%+v) = %v, want %q", tc.opts, err, tc.want)
@@ -189,7 +282,16 @@ func TestOptionsValidation(t *testing.T) {
 			t.Errorf("InitWithOptions(%+v): want error", tc.opts)
 		}
 	}
-	// A valid call after the once guard was consumed is a no-op.
+	// Common BUILD_VERSION shapes are valid; surrounding whitespace is trimmed.
+	for _, v := range []string{"", "unknown", "dev", "v1.2.3", "1.2.3-rc.1+build.5", "v1.2.3-4-gabc1234", "abc1234", " v1.0.0\n"} {
+		o := iamOpts
+		o.BuildVersion = v
+		if err := metrics.InitWithRegistererOptions(o, prometheus.NewRegistry()); err != nil {
+			t.Errorf("BuildVersion %q: %v", v, err)
+		}
+	}
+	// A valid call once metrics are initialized is a no-op (same identity).
+	initPlatform(t, iamOpts)
 	if err := metrics.InitWithOptions(iamOpts); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +310,9 @@ func TestMustInitFromConfig_EnvFallback(t *testing.T) {
 	}()
 	t.Setenv("APP_ENV", "")
 	t.Setenv("ENVIRONMENT", "prod")
-	metrics.MustInitFromConfig(metrics.Options{ServiceName: "event-consumer"}) // valid; once already consumed
+	// Valid; the first identity is kept because testenv enables
+	// AllowIdentityChangeForTesting (the mismatch panic is pinned in test/unit/uninit).
+	metrics.MustInitFromConfig(metrics.Options{ServiceName: "event-consumer"})
 	t.Setenv("OBSERVABILITY_DOMAIN", "")
 	func() {
 		defer func() {

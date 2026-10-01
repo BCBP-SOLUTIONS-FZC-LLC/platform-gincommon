@@ -1,32 +1,74 @@
 graph LR
+    server(["cmd/server"])
+    metricslint(["cmd/metricslint"])
+    demo(["internal/server"])
+
     gincommon(["pkg/gincommon"])
     grpccommon(["pkg/grpccommon"])
-    logger_pub(["pkg/logger"])
+    obsregistry_pkg(["pkg/obsregistry"])
+    logger_pkg(["pkg/logger"])
+
     http_mw(["adapter/inbound/http/middleware"])
     grpc_mw(["adapter/inbound/grpc/middleware"])
     label(["adapter/inbound/label"])
-    logger_adp(["adapter/outbound/logger"])
+
     metrics(["adapter/outbound/metrics"])
     otel(["adapter/outbound/otel"])
+    logger_adp(["adapter/outbound/logger"])
+
+    obsregistry(["internal/obsregistry"])
     config(["internal/config"])
+
     service(["core/service"])
     port(["core/port"])
     domain(["core/domain"])
 
-    gincommon    --> http_mw
-    gincommon    --> metrics
-    gincommon    --> otel
-    gincommon    --> config
-    gincommon    --> service
-    gincommon    --> port
-    grpccommon   --> grpc_mw
-    grpccommon   --> metrics
-    logger_pub   --> logger_adp
-    http_mw      --> domain
-    http_mw      --> port
-    http_mw      --> service
-    http_mw      --> label
-    grpc_mw      --> metrics
-    service      --> port
-    service      --> domain
-    logger_adp   --> port
+    server      --> demo
+    server      --> config
+    metricslint --> obsregistry
+    demo        --> gincommon
+    demo        --> logger_adp
+    demo        --> config
+    demo        --> port
+
+    gincommon   --> http_mw
+    gincommon   --> metrics
+    gincommon   --> otel
+    gincommon   --> obsregistry
+    gincommon   --> logger_pkg
+    gincommon   --> config
+    gincommon   --> service
+    gincommon   --> port
+    gincommon   --> domain
+
+    grpccommon  --> grpc_mw
+    grpccommon  --> label
+    grpccommon  --> metrics
+    grpccommon  --> otel
+    grpccommon  --> config
+    grpccommon  --> service
+    grpccommon  --> port
+    grpccommon  --> domain
+
+    obsregistry_pkg --> obsregistry
+    logger_pkg  --> logger_adp
+    logger_pkg  --> port
+
+    http_mw     --> label
+    http_mw     --> metrics
+    http_mw     --> service
+    http_mw     --> port
+    http_mw     --> domain
+    grpc_mw     --> label
+    grpc_mw     --> metrics
+    grpc_mw     --> service
+    grpc_mw     --> port
+    grpc_mw     --> domain
+
+    metrics     --> obsregistry
+    metrics     --> config
+    otel        --> config
+    otel        --> port
+
+    service     --> domain
+    port        --> domain

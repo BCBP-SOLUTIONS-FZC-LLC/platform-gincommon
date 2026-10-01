@@ -406,6 +406,15 @@ func (r *Registry) CheckIdentity(domain, service, environment string) (string, e
 	return r.NormalizeEnvironment(environment)
 }
 
+// CheckVersion validates a build version against the version label
+// vocabulary (the platform_build_info version label).
+func (r *Registry) CheckVersion(version string) error {
+	if l := r.Labels["version"]; l != nil && !l.Allows(version) {
+		return fmt.Errorf("build version %q does not match the version label pattern %s (set Config.BuildVersion or BUILD_VERSION)", version, l.Pattern)
+	}
+	return nil
+}
+
 // ServicePrefix returns the <domain>_<service>_ prefix Tier 3 metrics of
 // service must use. A service name already starting with the domain
 // (iam-event-consumer in iam) is not prefixed twice.
@@ -469,6 +478,9 @@ func (r *Registry) CheckCustom(t Type, name string, labelNames []string, domain,
 		return fmt.Errorf("metric %q: name must be snake_case [a-z0-9_]", name)
 	}
 	if m, ok := r.Lookup(name); ok {
+		if m.Tier == TierLegacy {
+			return fmt.Errorf("metric %q is a %s legacy name; emit its replacement %s instead", name, m.Status, strings.Join(m.Replacements, ", "))
+		}
 		return fmt.Errorf("metric %q is a %s registry metric; create it from the registry (NewShared*) instead", name, m.Tier)
 	}
 	if strings.HasPrefix(name, "platform_") {

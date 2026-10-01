@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -9,6 +10,11 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
 )
+
+// DemoRequestTimeout is the per-request deadline the demo router sets through
+// gincommon.Config.RequestTimeout (the http.Server in cmd/server leaves WriteTimeout
+// unset and relies on it).
+const DemoRequestTimeout = 30 * time.Second
 
 // NewRouter builds the local demo router: observability on all routes; /health and /metrics
 // are public. Use gincommon.ProtectedMiddlewares on route groups in consumer services.
@@ -24,6 +30,9 @@ func NewRouter(log port.Logger, serviceName string) *gin.Engine {
 		Logger:       log,
 		ServiceName:  serviceName,
 		BuildVersion: config.BuildVersion(),
+		// Innermost observability handler: a handler that overruns the deadline
+		// without responding gets a 503 that metrics, logs and spans all record.
+		RequestTimeout: DemoRequestTimeout,
 	}
 	for _, m := range gincommon.ObservabilityMiddlewares(cfg) {
 		r.Use(m)

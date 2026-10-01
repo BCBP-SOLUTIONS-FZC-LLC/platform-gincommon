@@ -13,3 +13,12 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: [dependencies, github-actions]
+
+  # Dockerfile base images (digest-pinned; re-run `make pin-base-images` so
+  # .docker-digests stays in sync with the bumped FROM lines).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, docker]

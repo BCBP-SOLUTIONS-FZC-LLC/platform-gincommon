@@ -3,13 +3,17 @@ package gincommon
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/obsregistry"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/logger"
 )
 
 // Metrics API for consuming services' own collectors, so they never import
@@ -67,8 +71,44 @@ func MetricsGatherer() Gatherer {
 // MetricsHandler serves every collector registered on MetricsRegisterer —
 // gincommon's own metrics plus any custom collectors — in the
 // Prometheus exposition format. Mount it on the service's metrics port.
+//
+// A collector that fails during a scrape does not blank the page: the
+// handler serves every metric that was gathered (promhttp.ContinueOnError)
+// and logs the gather error through logger.Default() (stderr if that logger
+// cannot be built). Each distinct error is logged when first seen and then at
+// most once every 5 minutes, so a persistently broken collector does not log
+// on every scrape; promhttp_metric_handler_errors_total{cause} counts every
+// occurrence (exempt from the observability standard like go_* and process_*).
+// One broken custom collector cannot hide gincommon's own metrics.
 func MetricsHandler() http.Handler {
-	return promhttp.HandlerFor(MetricsGatherer(), promhttp.HandlerOpts{})
+	opts := promhttp.HandlerOpts{
+		ErrorHandling: promhttp.ContinueOnError,
+		ErrorLog:      metricsErrorLog,
+	}
+	// Register the error counter only when the registerer is the gatherer
+	// this handler scrapes, so it is actually exposed; promhttp reuses an
+	// already registered counter when MetricsHandler is called again.
+	reg := MetricsRegisterer()
+	if _, ok := reg.(prometheus.Gatherer); ok {
+		opts.Registry = reg
+	}
+	return promhttp.HandlerFor(MetricsGatherer(), opts)
+}
+
+// metricsErrorInterval is how often MetricsHandler repeats one distinct error.
+const metricsErrorInterval = 5 * time.Minute
+
+// metricsErrorLog receives gather and encoding errors from MetricsHandler.
+var metricsErrorLog = metrics.NewRateLimitedErrorLog(metricsErrorInterval, 64, nil, logMetricsHandlerError)
+
+var metricsStderrLog = log.New(os.Stderr, "gincommon: metrics handler: ", log.LstdFlags)
+
+func logMetricsHandlerError(msg string) {
+	if l, err := logger.Default(); err == nil && l != nil {
+		l.Error("metrics handler error", map[string]interface{}{"error": msg})
+		return
+	}
+	metricsStderrLog.Println(msg)
 }
 
 // NewCounterVec builds and registers a service-specific counter vector.

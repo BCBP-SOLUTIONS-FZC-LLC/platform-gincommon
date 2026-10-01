@@ -9,7 +9,7 @@ import (
 // MetricsRegisterer returns the prometheus.Registerer gincommon's own gRPC metrics are
 // registered to. Register custom application collectors here (not
 // prometheus.DefaultRegisterer directly) so they stay consistent with tests that use an
-// isolated registry via metrics.InitWithRegisterer. Call after
+// isolated registry via metrics.InitWithRegistererOptions. Call after
 // ObservabilityUnaryInterceptors/ObservabilityStreamInterceptors/Full* has run.
 //
 // Metrics initialization is shared process-wide with pkg/gincommon: whichever package's

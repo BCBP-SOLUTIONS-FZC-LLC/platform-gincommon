@@ -1,0 +1,26 @@
+flowchart TD
+    subgraph http["HTTP — Config.RequestTimeout > 0 (innermost observability handler)"]
+        H1(["TimeoutMiddleware(d)"]) --> H2["c.Request = WithContext(context.WithTimeout(d))"]
+        H2 --> H3["c.Next() — handler runs on the same goroutine<br/>it must honour c.Request.Context()"]
+        H3 --> H4{"ctx error is DeadlineExceeded?<br/>(client Canceled is NOT a timeout)"}
+        H4 -- no --> H9(["return — handler's response stands"])
+        H4 -- yes --> H5{"response written, or status changed from 200?<br/>(e.g. c.Status(204) after the deadline)"}
+        H5 -- yes --> H9
+        H5 -- no --> H6["platform_http_request_timeouts_total +1<br/>503 request timeout JSON"]
+        H6 --> H7(["Metrics / Logging / Tracing are OUTSIDE it:<br/>they record the same 503 the client receives"])
+    end
+
+    subgraph grpcu["gRPC unary — TimeoutUnaryInterceptor(d), appended after Full*"]
+        U1(["capDeadline: min(client deadline, now + d)"]) --> U2["handler(ctx) inline — must honour ctx"]
+    end
+
+    subgraph grpcs["gRPC stream — TimeoutStreamInterceptor(d), appended after Full*"]
+        S1(["client deadline earlier than d?"]) -- yes --> S2["run handler inline"]
+        S1 -- no --> S3["start handler in a goroutine on timeoutStream"]
+        S3 --> S4{"select: handler done or capped ctx Done"}
+        S4 -- "handler done" --> S5["return its result<br/>re-raise a handler panic with its original value"]
+        S4 -- "client cancelled" --> S5b["wait for the handler's own result"]
+        S4 -- "cap reached" --> S6["mark expired → every Send/Recv/SetHeader/SendHeader/SetTrailer<br/>on the wrapper now returns DeadlineExceeded"]
+        S6 --> S7["return status DeadlineExceeded<br/>grpc-go tears the stream down → abandoned handler exits"]
+        S7 --> S8(["observability (outside) records DeadlineExceeded<br/>abandoned handler's later result / panic is discarded (panic logged to stderr)"])
+    end

@@ -1,30 +1,39 @@
 graph LR
-    subgraph service["Consuming service (your code)"]
+    subgraph svc["Consuming service (your code)"]
         main["main.go"]
-        routes["router.go\nr.Use(middlewares...)\nr.GET('/users', RequirePermission(...))"]
+        routes["router: r.Use(...) · api group · per-route RequirePermission"]
+        grpcsrv["grpc.NewServer(ChainUnary/StreamInterceptor(...))"]
+        authz["your Authorizer<br/>Authorize(ctx, *RequestContextData, action, resource)"]
+        out["outbound clients"]
     end
 
-    subgraph lib["platform-gincommon"]
-        logger_new["pkg/logger.NewLogger(env)"]
-        init_tr["pkg/gincommon.InitTracingFromEnv()"]
-        obs_mw["pkg/gincommon.ObservabilityMiddlewares(cfg)"]
-        prot_mw["pkg/gincommon.ProtectedMiddlewares(cfg)"]
-        def_mw["pkg/gincommon.DefaultMiddlewares(cfg)"]
-        rp["pkg/gincommon.RequirePermissionWithLogger\n(action, resource, auth, logger)"]
-        grpc_mw["pkg/grpccommon.DefaultUnaryInterceptors(cfg)"]
-        shutdown["pkg/gincommon.Shutdown(logger)\nflush spans + logger.Sync()"]
+    subgraph lib["platform-gincommon — pkg/ only"]
+        newlog["logger.NewLogger(APP_ENV)"]
+        cfg["gincommon.Config / grpccommon.Config<br/>ServiceName · Domain · Environment · BuildVersion · Logger<br/>RequestTimeout (HTTP)"]
+        early["gincommon.InitTracingWithConfig (optional — spans before the server)"]
+        obs["ObservabilityMiddlewares(cfg)<br/>(inits metrics + tracing)"]
+        prot["ProtectedMiddlewares(cfg)"]
+        rp["RequirePermissionWithLogger(action, resource, authz, log)"]
+        full["FullUnary/StreamInterceptors(cfg)<br/>+ Timeout*Interceptor(d) appended last"]
+        known["RegisterHealth(s) · RegisterKnownMethods(s)<br/>after all services are registered"]
+        prop["PropagateHeaders / PropagateIdentityHeaders<br/>UnaryClientInterceptor / UnaryClientIdentityInterceptor"]
+        mh["MetricsHandler() · NewShared*Vec · New*Vec"]
+        shut["Shutdown(log) — flush spans + logger.Sync()"]
     end
 
-    main -->|"APP_ENV"| logger_new
-    main -->|"OTEL_* env vars"| init_tr
-    logger_new -->|"port.Logger"| obs_mw
-    logger_new -->|"port.Logger"| prot_mw
-    obs_mw -->|"[]gin.HandlerFunc"| routes
-    prot_mw -->|"[]gin.HandlerFunc"| routes
-    main -->|"cfg{Logger, ServiceName}"| def_mw
-    def_mw -->|"[]gin.HandlerFunc"| routes
-    logger_new -->|"port.Logger"| rp
+    main --> newlog
+    newlog -->|"Logger"| cfg
+    main --> cfg
+    cfg --> early
+    cfg --> obs
+    cfg --> prot
+    cfg --> full
+    obs -->|"[]gin.HandlerFunc"| routes
+    prot -->|"[]gin.HandlerFunc"| routes
+    authz --> rp
     rp -->|"gin.HandlerFunc"| routes
-    main -->|"cfg{ServiceName}"| grpc_mw
-    grpc_mw -->|"[]grpc.UnaryServerInterceptor"| main
-    main -->|"defer on SIGTERM"| shutdown
+    full -->|"interceptors"| grpcsrv
+    grpcsrv --> known
+    out --> prop
+    routes --> mh
+    main -->|"after srv.Shutdown / GracefulStop"| shut

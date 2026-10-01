@@ -11,7 +11,7 @@ Every metric carries the centrally injected const labels `domain`, `service`, `e
 | `platform_build_info` | platform-gincommon | gauge | proposed | `version` | Always 1; the version label carries the build of the emitting service. | count by (domain, environment, version) for rollout tracking; never summed. |
 | `platform_http_requests_total` | platform-gincommon | counter | proposed | `method`, `route`, `status_class`, `error_class` | HTTP requests completed by the server, including recovered panics (counted as 5xx). | sum by (domain, service, environment, ...) of rate(); safe to sum across services and domains. |
 | `platform_http_request_duration_seconds` | platform-gincommon | histogram (request_duration) | proposed | `method`, `route`, `status_class`, `error_class` | HTTP server request latency in seconds, measured by MetricsMiddleware. | histogram_quantile over sum by (le, ...) of rate(_bucket); buckets are identical in every service. |
-| `platform_http_request_size_bytes` | platform-gincommon | histogram (payload_size) | proposed | `method`, `route`, `status_class`, `error_class` | HTTP request body size in bytes from Content-Length (0 when unknown). | histogram_quantile over sum by (le, ...) of rate(_bucket). |
+| `platform_http_request_size_bytes` | platform-gincommon | histogram (payload_size) | proposed | `method`, `route`, `status_class`, `error_class` | HTTP request body size in bytes from Content-Length (not observed when the length is unknown, e.g. chunked uploads). | histogram_quantile over sum by (le, ...) of rate(_bucket). |
 | `platform_http_response_size_bytes` | platform-gincommon | histogram (payload_size) | proposed | `method`, `route`, `status_class`, `error_class` | HTTP response body size in bytes. | histogram_quantile over sum by (le, ...) of rate(_bucket). |
 | `platform_http_active_requests` | platform-gincommon | gauge | proposed | `route` | HTTP requests currently being handled. | sum by (domain, service, environment); also an HPA signal. |
 | `platform_http_panics_total` | platform-gincommon | counter | proposed | `method`, `route` | HTTP handler panics recovered by the middleware stack. | sum by (domain, service, environment) of increase(). |
@@ -171,5 +171,5 @@ Every metric carries the centrally injected const labels `domain`, `service`, `e
 | `dependency_request` | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 |
 | `event_propagation` | 0.01 0.05 0.1 0.25 0.5 1 2.5 5 10 30 60 300 900 3600 |
 | `message_processing` | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 60 120 |
-| `payload_size` | 128 256 512 1024 2048 4096 8192 16384 32768 65536 262144 1.048576e+06 |
+| `payload_size` | 128 256 512 1024 2048 4096 8192 16384 32768 65536 262144 1.048576e+06 4.194304e+06 1.6777216e+07 |
 | `request_duration` | 0.001 0.002 0.005 0.01 0.015 0.025 0.05 0.075 0.1 0.15 0.2 0.3 0.5 0.75 1 2 5 10 |

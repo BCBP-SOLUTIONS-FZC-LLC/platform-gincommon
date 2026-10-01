@@ -9,4 +9,8 @@ const (
 	CtxRequestIDKey = "request_id"
 	// CtxRequestContextKey stores *domain.RequestContext after ContextMiddleware.
 	CtxRequestContextKey = domain.GinRequestContextKey
+	// ctxIdentityRejectedKey is set by ContextMiddleware when it rejects the request
+	// after RequireAuth accepted the identity headers, so the access log does not
+	// report that identity as verified.
+	ctxIdentityRejectedKey = "gincommon.identity_rejected"
 )

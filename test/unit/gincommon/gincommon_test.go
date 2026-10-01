@@ -14,7 +14,6 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/logger"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	internalotel "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
 )
@@ -125,7 +124,7 @@ func TestDefaultMiddlewares_IncrementsHttpPanicTotal(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body["error"] != "Internal Server Error" {
+	if body["error"] != "internal server error" {
 		t.Fatalf("error = %v", body["error"])
 	}
 	if body["request_id"] == nil || body["request_id"] == "" {
@@ -175,14 +174,14 @@ func TestEnsureTracing_InstallsWhenNoneRegistered(t *testing.T) {
 	}
 }
 
-func TestEnsureInitTelemetry_SkipsWhenAlreadyInstalled(t *testing.T) {
+func TestEnsureTracing_SkipsWhenAlreadyInstalled(t *testing.T) {
 	shutdown := gincommon.InitTracing("base-svc", "1.0.0", "")
 	defer shutdown()
 
 	first := gootel.GetTracerProvider()
-	gincommon.EnsureInitTelemetry("other-svc", "2.0.0", internalotel.TelemetryConfig{})
+	gincommon.EnsureTracing("other-svc", "2.0.0", "")
 	if gootel.GetTracerProvider() != first {
-		t.Fatal("EnsureInitTelemetry replaced an already-installed TracerProvider")
+		t.Fatal("EnsureTracing replaced an already-installed TracerProvider")
 	}
 }
 

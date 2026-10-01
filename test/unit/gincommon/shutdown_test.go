@@ -1,11 +1,11 @@
 package gincommon_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	gootel "go.opentelemetry.io/otel"
-	nooptrace "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
 )
@@ -31,9 +31,11 @@ func TestShutdown_NilLogger_FlushesTracingOnly(t *testing.T) {
 	if err := gincommon.Shutdown(nil); err != nil {
 		t.Fatalf("Shutdown(nil) = %v, want nil", err)
 	}
-	// After Shutdown the provider must be reset to the noop implementation.
-	if _, ok := gootel.GetTracerProvider().(nooptrace.TracerProvider); !ok {
-		t.Fatalf("tracer provider type = %T, want noop after Shutdown", gootel.GetTracerProvider())
+	// After Shutdown the global provider stays installed but records nothing,
+	// so a provider captured now is still live after a later Init.
+	captured := gootel.GetTracerProvider()
+	if _, span := captured.Tracer("t").Start(context.Background(), "after-shutdown"); span.IsRecording() {
+		t.Fatal("span recording after Shutdown, want a non-recording no-op span")
 	}
 }
 

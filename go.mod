@@ -1,6 +1,8 @@
 module github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon
 
-go 1.26.6
+go 1.26.0
+
+toolchain go1.26.6
 
 require (
 	github.com/gin-gonic/gin v1.12.0

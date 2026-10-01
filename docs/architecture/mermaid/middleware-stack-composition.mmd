@@ -1,20 +1,17 @@
 flowchart TD
-    A([Middleware stack constructor called]) --> B{Which constructor?}
+    A(["Stack constructor called"]) --> B{"Which constructor?"}
 
-    B -- ObservabilityMiddlewares --> C[panic: if ServiceName empty]
-    C --> D[metrics.Init — idempotent]
-    D --> E[resolve BuildVersion from env if empty]
-    E --> F[resolveTelemetry — merge cfg.Tracing over env defaults]
-    F --> G[EnsureInitTelemetry — installs SDK if no provider yet]
-    G --> H["return [\n  PanicRecoveryMiddleware\n  RequestIDMiddleware\n  TracingMiddleware\n  CorrelationHeadersMiddleware\n  MetricsMiddleware\n  LoggingMiddleware\n]"]
+    B -- "ObservabilityMiddlewares(cfg)" --> C{"cfg.ServiceName empty?"}
+    C -- yes --> CP(["panic: ServiceName is required"])
+    C -- no --> D["metrics.MustInitFromConfig<br/>ApplyEnvDefaults → resolve → InitWithOptions<br/>same identity: no-op · unknown version inherits/upgrades<br/>different identity: panic ErrIdentityMismatch"]
+    D --> E["resolve telemetry: cfg.Tracing over OTEL_* env<br/>+ Domain / Environment for the trace resource"]
+    E --> F["ensureInitTelemetry<br/>install when no provider or only a provisional one<br/>else keep it (upgrade its error logger)"]
+    F --> G["return [<br/>PanicRecovery(logger)<br/>RequestID<br/>Tracing(ServiceName)<br/>CorrelationHeaders<br/>Metrics(logger)<br/>Logging(logger)<br/>+ Timeout(RequestTimeout) when > 0  — innermost<br/>]"]
 
-    B -- ProtectedMiddlewares --> I[NewContextService]
-    I --> J["return [\n  RequireAuth\n  ContextMiddleware\n]"]
+    B -- "ProtectedMiddlewares(cfg)" --> H["service.NewContextService()"]
+    H --> I["return [<br/>RequireAuth(logger)<br/>ContextMiddleware(ctxSvc, logger)<br/>]"]
 
-    B -- DefaultMiddlewares --> K[calls ObservabilityMiddlewares]
-    K --> L[calls ProtectedMiddlewares]
-    L --> M["return [\n  PanicRecoveryMiddleware\n  RequestIDMiddleware\n  TracingMiddleware\n  CorrelationHeadersMiddleware\n  MetricsMiddleware\n  LoggingMiddleware\n  RequireAuth\n  ContextMiddleware\n]"]
+    B -- "DefaultMiddlewares(cfg)" --> J["ObservabilityMiddlewares(cfg)<br/>+ ProtectedMiddlewares(cfg)"]
 
-    style H text-align:left
-    style J text-align:left
-    style M text-align:left
+    B -- "FullUnary/StreamInterceptors(cfg)" --> K["Observability*(cfg) + Protected*(cfg)<br/>recovery → request ID → tracing → metrics → logging<br/>→ auth → context"]
+    K --> L(["append Timeout*Interceptor(d) last — innermost<br/>RequirePermission* after Protected*"])

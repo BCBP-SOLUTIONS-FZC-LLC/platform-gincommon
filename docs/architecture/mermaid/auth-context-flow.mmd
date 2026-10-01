@@ -1,0 +1,20 @@
+flowchart TD
+    A(["Protected request / RPC arrives"]) --> H{"gRPC health method?<br/>exact match: /grpc.health.v1.Health/Check · Watch · List"}
+    H -- yes --> PASS(["handler — no identity required"])
+    H -- "no (HTTP always no)" --> R{"x-user-id / x-tenant-id<br/>more than one value?"}
+    R -- yes --> AMB["401 ambiguous ... header<br/>gRPC: Unauthenticated ambiguous ... metadata"]
+    R -- no --> V{"present, non-blank, ≤ 256 bytes,<br/>no control characters?"}
+    V -- no --> MISS["401 / Unauthenticated<br/>gRPC distinguishes missing vs blank"]
+    V -- yes --> RL["join repeated x-tenant-roles with ','<br/>ParseRolesStrict: tokens [a-zA-Z0-9_-]+ ≤ 64 chars,<br/>invalid tokens dropped, deduplicated"]
+    RL --> CAP{"header > 4096 bytes<br/>or > 64 distinct roles?"}
+    CAP -- yes --> BADR["401 invalid tenant roles<br/>gRPC: Unauthenticated invalid tenant roles"]
+    CAP -- no --> BC["ContextService.BuildContext<br/>RequestContext{TenantID, UserID, Roles, TraceID, ClientIP}"]
+    BC -- "builder error" --> BUILD["sentinel (missing user / tenant id): 401 / Unauthenticated<br/>other: HTTP 400 · gRPC InvalidArgument — invalid request context<br/>internal detail only in the sanitized warn log"]
+    BC -- ok --> STORE["HTTP: store in the Gin context (c.Set)<br/>gRPC: store in the Go context + fill logging identity holder"]
+    STORE --> NEXT(["RequirePermission (optional) → handler"])
+
+    AMB --> AUDIT
+    MISS --> AUDIT
+    BADR --> AUDIT
+    BUILD --> AUDIT
+    AUDIT["warn auth: request rejected / context: request rejected<br/>reason · method · route · status · client_ip · trace_id · request_id<br/>claimed_user_id · claimed_tenant_id (sanitized, 256-byte cap)<br/>access log uses claimed_* — never tenant_id/user_id"]

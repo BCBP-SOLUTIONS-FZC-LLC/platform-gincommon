@@ -1,44 +1,17 @@
 package metrics
 
-// RequestDurationBuckets are histogram upper bounds in seconds, tuned for IAM-style
-// workloads: fast authn/authz and token checks (1–50ms), policy lookups (50–500ms),
-// occasional heavy paths (1–5s), with a 10s tail for timeouts.
-// Used by both HTTP and gRPC duration histograms.
-var RequestDurationBuckets = []float64{
-	0.001, // 1ms
-	0.002,
-	0.005,
-	0.01,
-	0.015,
-	0.025,
-	0.05,
-	0.075,
-	0.1,
-	0.15,
-	0.2,
-	0.3,
-	0.5,
-	0.75,
-	1,
-	2,
-	5,
-	10,
-}
+import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/obsregistry"
 
-// PayloadSizeBuckets are histogram upper bounds in bytes, tuned for IAM APIs:
-// compact JSON (JWT claims, policy snippets, role lists) with headroom for bulk policy payloads.
-// Used by both HTTP and gRPC payload size histograms.
-var PayloadSizeBuckets = []float64{
-	128,
-	256,
-	512,
-	1024,
-	2048,
-	4096,
-	8192,
-	16384,
-	32768,
-	65536,
-	262144,
-	1048576,
-}
+// RequestDurationBuckets are the registry's request_duration preset (seconds),
+// tuned for IAM-style workloads: fast authn/authz and token checks (1–50ms),
+// policy lookups (50–500ms), occasional heavy paths (1–5s), with a 10s tail
+// for timeouts. Used by both HTTP and gRPC duration histograms. It is a copy:
+// the registry is the source of truth.
+var RequestDurationBuckets = obsregistry.Default().Buckets("request_duration")
+
+// PayloadSizeBuckets are the registry's payload_size preset (bytes): compact
+// JSON (JWT claims, policy snippets, role lists) up to the 4 MiB gRPC default
+// maximum message size, with a 16 MiB tail for bulk payloads. Used by both
+// HTTP and gRPC payload size histograms. It is a copy: the registry is the
+// source of truth.
+var PayloadSizeBuckets = obsregistry.Default().Buckets("payload_size")

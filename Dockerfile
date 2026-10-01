@@ -15,6 +15,9 @@ ARG APP_NAME=platform-gincommon
 RUN mkdir -p /out && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/${APP_NAME} ./cmd/server
 
+# TODO: alpine 3.21 reaches end of support around Nov 2026 — move to a current
+# alpine release and re-pin with `make pin-base-images` (Dependabot's docker
+# ecosystem also proposes base-image bumps).
 FROM alpine:3.21@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507
 
 RUN apk add --no-cache ca-certificates

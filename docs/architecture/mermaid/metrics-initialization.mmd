@@ -1,15 +1,25 @@
 flowchart TD
-    A([metrics.Init called]) --> B{sync.Once\nalready fired?}
-    B -- yes --> Z([no-op — return])
-    B -- no  --> C["normalize empty buildVersion -> unknown"]
-    C --> D[initMetricsWithRegisterer\nwith prometheus.DefaultRegisterer]
-    D --> E[build constLabels\nservice=serviceName\nversion=buildVersion]
-    E --> F[create HTTP collectors\nHttpRequestsTotal · HttpRequestDuration\nHttpRequestSizeBytes · HttpResponseSizeBytes\nHttpActiveRequests · HttpPanicTotal\nRateLimitedRequestsTotal · HttpRequestTimeoutTotal · BuildInfo]
-    F --> G[initGRPCMetrics\nGrpcRequestsTotal · GrpcRequestDuration\nGrpcRequestSizeBytes · GrpcResponseSizeBytes\nGrpcInflight · GrpcRateLimitedRequestsTotal · GrpcPanicTotal]
-    G --> H[reg.MustRegister all collectors]
-    H --> I[BuildInfo.WithLabelValues.Set 1]
-    I --> J([return — vars are non-nil])
+    A(["MustInitFromConfig(opts) — from every pkg constructor"]) --> B["ApplyEnvDefaults<br/>BuildVersion ← BUILD_VERSION ← unknown<br/>Domain ← OBSERVABILITY_DOMAIN<br/>Environment ← APP_ENV ← ENVIRONMENT (trim + lowercase)"]
+    B --> C["resolve()<br/>registry checks: domain, service, environment vocabulary<br/>SanitizeVersion: strip refs/tags/ · refs/heads/, bad chars → _,<br/>leading non-alnum dropped, ≤ 64 chars (warn once)"]
+    C -- invalid --> X(["ErrDomainRequired / registry error<br/>MustInitFromConfig panics at startup"])
+    C -- ok --> L["initMu.Lock()"]
+    L --> D{"collector set already published?"}
 
-    A2([metrics.InitWithRegisterer called]) --> C2[normalize empty buildVersion]
-    C2 --> D2[initMetricsWithRegisterer\nwith provided registerer]
-    D2 --> E
+    D -- no --> E["initCollectors: registryBuilder builds every platform_* collector<br/>name, help, labels, buckets from registry.json<br/>const labels domain · service · environment"]
+    E --> F["registerAll with Register (not MustRegister)"]
+    F -- "any failure" --> RB(["unregister the ones already registered<br/>return error — nothing published, call can be retried"])
+    F -- ok --> G["publish collector set via atomic.Pointer<br/>platform_build_info{version} = 1<br/>exported vars refreshed as a read-only test view"]
+    G --> OK(["nil"])
+
+    D -- yes --> T{"AllowIdentityChangeForTesting?<br/>(test/testenv only)"}
+    T -- yes --> OK
+    T -- no --> M{"same domain, service, environment?<br/>version: unknown matches anything"}
+    M -- no --> MM(["ErrIdentityMismatch naming the field<br/>pkg constructors panic at startup"])
+    M -- yes --> U{"established version unknown<br/>and this call has a real one?"}
+    U -- yes --> UP["upgradeVersion: relabel platform_build_info<br/>publish a copy of the set with the real version"]
+    U -- no --> OK
+    UP --> OK
+
+    subgraph rec["Recording hot path (record.go)"]
+        R1["RecordHTTP / RecordGRPC / HTTPActiveInc / RecordHTTPPanic / ...<br/>load the atomic set — nil before init → no-op<br/>negative sizes (UnknownSize) are not observed"]
+    end

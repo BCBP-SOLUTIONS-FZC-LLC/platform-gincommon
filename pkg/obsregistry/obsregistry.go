@@ -19,6 +19,7 @@
 package obsregistry
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -70,6 +71,33 @@ const (
 	StatusRemoved    = obsregistry.StatusRemoved
 )
 
+// Severity of a Finding.
+type Severity = obsregistry.Severity
+
+// Finding severities. Errors fail CI; warnings are reported only.
+const (
+	SeverityError   = obsregistry.SeverityError
+	SeverityWarning = obsregistry.SeverityWarning
+)
+
+// Rule identifiers reported in Finding.Rule.
+const (
+	RuleNameFormat      = obsregistry.RuleNameFormat
+	RuleNamespace       = obsregistry.RuleNamespace
+	RuleType            = obsregistry.RuleType
+	RuleSuffix          = obsregistry.RuleSuffix
+	RuleRequiredLabel   = obsregistry.RuleRequiredLabel
+	RuleLabelVocabulary = obsregistry.RuleLabelVocabulary
+	RuleProhibitedLabel = obsregistry.RuleProhibitedLabel
+	RuleLabelValue      = obsregistry.RuleLabelValue
+	RuleLabelName       = obsregistry.RuleLabelName
+	RuleCardinality     = obsregistry.RuleCardinality
+	RuleStatus          = obsregistry.RuleStatus
+	RuleDeprecated      = obsregistry.RuleDeprecated
+	RuleRemoved         = obsregistry.RuleRemoved
+	RuleGather          = obsregistry.RuleGather
+)
+
 // Default returns the registry embedded in this module version.
 func Default() *Registry { return obsregistry.Default() }
 
@@ -80,12 +108,20 @@ func Parse(data []byte) (*Registry, error) { return obsregistry.Parse(data) }
 func ServicePrefix(domain, service string) string { return obsregistry.ServicePrefix(domain, service) }
 
 // Validate gathers g and validates the result against the default registry.
+//
+// When Gather fails, the families it did return are still validated: the
+// report is returned together with the gather error, and also carries the
+// error as a "gather" error finding, so rep.OK() is false either way.
 func Validate(g prometheus.Gatherer, opts Options) (*Report, error) {
-	fams, err := g.Gather()
-	if err != nil {
-		return nil, err
+	fams, gatherErr := g.Gather()
+	rep := Default().ValidateFamilies(fams, opts)
+	if gatherErr != nil {
+		rep.Findings = append(rep.Findings, Finding{
+			Severity: obsregistry.SeverityError, Rule: obsregistry.RuleGather, Metric: "(gather)", Message: gatherErr.Error(),
+		})
+		return rep, fmt.Errorf("gather metrics: %w", gatherErr)
 	}
-	return Default().ValidateFamilies(fams, opts), nil
+	return rep, nil
 }
 
 // ValidateText validates a Prometheus text-format scrape against the default registry.

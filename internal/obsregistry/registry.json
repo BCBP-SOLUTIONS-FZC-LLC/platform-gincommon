@@ -87,7 +87,9 @@
       32768,
       65536,
       262144,
-      1048576
+      1048576,
+      4194304,
+      16777216
     ],
     "dependency_request": [
       0.005,
@@ -412,7 +414,7 @@
       "unit": "bytes",
       "buckets": "payload_size",
       "status": "proposed",
-      "help": "HTTP request body size in bytes from Content-Length (0 when unknown).",
+      "help": "HTTP request body size in bytes from Content-Length (not observed when the length is unknown, e.g. chunked uploads).",
       "labels": [
         "method",
         "route",

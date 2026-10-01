@@ -83,11 +83,9 @@ func StreamMetricsInterceptor() grpc.StreamServerInterceptor {
 }
 
 func observeGRPC(method string, elapsed time.Duration, err error, reqSize, respSize float64) {
-	st, _ := status.FromError(err)
-	code := st.Code()
-	if code == codes.OK && err != nil {
-		code = codes.Unknown
-	}
+	// grpcCode classifies plain context errors as DeadlineExceeded/Canceled
+	// (what grpc-go sends) instead of Unknown, and never reports an error as OK.
+	code := grpcCode(err)
 
 	if code == codes.ResourceExhausted {
 		metrics.RecordGRPCRateLimited(method)

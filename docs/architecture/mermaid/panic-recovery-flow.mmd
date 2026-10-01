@@ -1,36 +1,47 @@
 sequenceDiagram
-    participant Gin as Gin Engine
-    participant PR as PanicRecoveryMiddleware
-    participant Next as Downstream Middleware / Handler
-    participant Span as OTel Span
-    participant Client
+    participant Srv as net/http server
+    participant PR as PanicRecovery (outermost)
+    participant TR as Tracing
+    participant ME as Metrics
+    participant LO as Logging
+    participant H as Handler
 
-    Gin ->>+ PR: ServeHTTP
-    Note over PR: record start time<br/>defer recover()
+    Srv ->>+ PR: ServeHTTP
+    PR ->>+ TR: c.Next()
+    TR ->>+ ME: c.Next()
+    ME ->>+ LO: c.Next()
+    LO ->>+ H: c.Next()
 
-    PR ->>+ Next: c.Next()
-
-    alt Handler panics
-        Next --x PR: panic(value)
-        Note over PR: recover() catches panic<br/>resolve route label<br/>debug.Stack()
-
-        alt logger != nil
-            PR ->> PR: service.Sanitize fields\n{error_category, panic, stack,\n method, route, status=500,\n trace_id, request_id, duration}
-            PR ->> PR: logger.Error "panic recovered"
-        else logger nil
-            PR ->> PR: log.Printf to stderr
+    alt handler panics with http.ErrAbortHandler (or a wrapped one)
+        H --x LO: panic(ErrAbortHandler)
+        Note over LO: recover → Debug log, aborted=true<br/>status = written status, else 499 → re-panic
+        LO --x ME: re-panic same value
+        Note over ME: counted as 4xx client_error (499)<br/>panic counter NOT incremented → re-panic
+        ME --x TR: re-panic
+        Note over TR: span gets http.aborted, NOT Error status<br/>span ended BEFORE re-panic (no SDK exception event)
+        TR --x PR: re-panic
+        Note over PR: Debug "request aborted"<br/>re-panic the BARE http.ErrAbortHandler
+        PR --x Srv: panic(http.ErrAbortHandler)
+        Note over Srv: identity match → connection aborted silently, no stack trace
+    else handler panics with any other value
+        H --x LO: panic(value)
+        Note over LO: panicked sentinel → http_request at Error, status 500
+        LO --x ME: unwind
+        Note over ME: platform_http_panics_total +1 · requests_total as 5xx
+        ME --x TR: unwind
+        Note over TR: RecordError(sanitized panic value) · status Error · span ended
+        TR --x PR: unwind
+        Note over PR: Error "panic recovered" — sanitized value + stack<br/>(stderr log.Printf when logger is nil)
+        alt response not yet written (even if handler called c.Abort())
+            PR ->> Srv: 500 JSON {error, status, trace_id, request_id}
+        else response already partly written
+            Note over PR: c.Abort() then panic(http.ErrAbortHandler)<br/>client sees a truncated response, never a complete 200
+            PR --x Srv: panic(http.ErrAbortHandler)
         end
-
-        PR ->> Span: span.RecordError(err)
-        PR ->> Span: span.SetStatus(Error, "panic")
-        PR ->> Span: span.SetAttributes(http.status_code=500)
-
-        alt response not yet started (!c.IsAborted())
-            PR ->> Client: 500 Internal Server Error JSON
-        end
-
-    else No panic
-        Next -->>- PR: return normally
+    else no panic
+        H -->>- LO: return
+        LO -->>- ME: return
+        ME -->>- TR: return
+        TR -->>- PR: return
     end
-
-    PR -->>- Gin: return
+    PR -->>- Srv: return

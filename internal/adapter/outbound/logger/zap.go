@@ -2,9 +2,12 @@
 package logger
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -15,52 +18,105 @@ type ZapLogger struct {
 	log *zap.Logger
 }
 
-// NewLogger builds a ZapLogger. Development (console-friendly) config is used when env is
-// "dev", "development", or "local"; production JSON config is used for all other values.
+// Sampling parameters used when LOG_SAMPLING=true: per second, per message
+// and level, the first samplingInitial entries are kept, then every
+// samplingThereafter-th.
+const (
+	samplingTick       = time.Second
+	samplingInitial    = 100
+	samplingThereafter = 100
+)
+
+// NewLogger builds a ZapLogger. Development settings (console encoder, debug
+// level, stack traces from warn) apply when env is "dev" or "local";
+// production settings (JSON encoder, info level, stack traces from error)
+// apply to every other value.
 //
-// When LOG_FILE is set (e.g. logs/app.log for local Grafana/Loki via Promtail), structured
-// JSON is also written to that path while dev console output on stderr is preserved.
+// Environment:
+//   - LOG_LEVEL (debug, info, warn, error) overrides the env-based level; an
+//     invalid value keeps the default and warns once on stderr.
+//   - LOG_SAMPLING=true enables Zap sampling. It is off by default: sampling
+//     keys on message and level, so it would drop most identical http_request
+//     entries (and repeated warn/error entries) above 100 per second.
+//   - LOG_FILE (e.g. logs/app.log for local Grafana/Loki via Promtail) also
+//     writes JSON to that path, alongside stderr.
+//
+// The level and sampling apply identically to stderr and LOG_FILE output.
 func NewLogger(env string) (*ZapLogger, error) {
-	logFile := os.Getenv("LOG_FILE")
-	if logFile == "" {
-		return newLoggerFromConfig(env)
+	dev := isDevEnv(env)
+	level := resolveLevel(dev)
+
+	core := newConsoleCore(dev, level)
+	if logFile := os.Getenv("LOG_FILE"); logFile != "" {
+		fileCore, err := newFileCore(logFile, level)
+		if err != nil {
+			return nil, err
+		}
+		core = zapcore.NewTee(fileCore, core)
+	}
+	if samplingEnabled() {
+		core = zapcore.NewSamplerWithOptions(core, samplingTick, samplingInitial, samplingThereafter)
 	}
 
-	fileCore, err := newFileCore(logFile)
-	if err != nil {
-		return nil, err
-	}
-
-	consoleCore, err := newConsoleCore(env)
-	if err != nil {
-		return nil, err
-	}
-
-	log := zap.New(
-		zapcore.NewTee(fileCore, consoleCore),
-		zap.AddCaller(),
-		zap.AddStacktrace(zapcore.ErrorLevel),
-	)
-	return &ZapLogger{log: log}, nil
-}
-
-func newLoggerFromConfig(env string) (*ZapLogger, error) {
-	var cfg zap.Config
-	if isDevEnv(env) {
-		cfg = zap.NewDevelopmentConfig()
+	opts := []zap.Option{zap.AddCaller(), zap.ErrorOutput(zapcore.Lock(os.Stderr))}
+	if dev {
+		opts = append(opts, zap.Development(), zap.AddStacktrace(zapcore.WarnLevel))
 	} else {
-		cfg = zap.NewProductionConfig()
+		opts = append(opts, zap.AddStacktrace(zapcore.ErrorLevel))
 	}
-
-	log, err := cfg.Build()
-	if err != nil {
-		return nil, err
-	}
-
-	return &ZapLogger{log: log}, nil
+	return &ZapLogger{log: zap.New(core, opts...)}, nil
 }
 
-func newFileCore(logFile string) (zapcore.Core, error) {
+// resolveLevel returns LOG_LEVEL when valid, else debug (dev) or info.
+func resolveLevel(dev bool) zapcore.Level {
+	def := zapcore.InfoLevel
+	if dev {
+		def = zapcore.DebugLevel
+	}
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL")))
+	switch raw {
+	case "":
+		return def
+	case "debug":
+		return zapcore.DebugLevel
+	case "info":
+		return zapcore.InfoLevel
+	case "warn", "warning":
+		return zapcore.WarnLevel
+	case "error":
+		return zapcore.ErrorLevel
+	default:
+		warnOnce("LOG_LEVEL", raw, def.String()+" (want debug, info, warn or error)")
+		return def
+	}
+}
+
+// samplingEnabled reports LOG_SAMPLING (default false).
+func samplingEnabled() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_SAMPLING")))
+	switch raw {
+	case "true", "1", "yes":
+		return true
+	case "", "false", "0", "no":
+		return false
+	default:
+		warnOnce("LOG_SAMPLING", raw, "false")
+		return false
+	}
+}
+
+// warned records key=value pairs already reported so an invalid setting is
+// warned about once per process, not on every NewLogger call.
+var warned sync.Map
+
+func warnOnce(key, value, using string) {
+	if _, loaded := warned.LoadOrStore(key+"="+value, struct{}{}); loaded {
+		return
+	}
+	log.Printf("gincommon: invalid %s=%q; using %s", key, value, using)
+}
+
+func newFileCore(logFile string, level zapcore.Level) (zapcore.Core, error) {
 	dir := filepath.Dir(logFile)
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -77,29 +133,17 @@ func newFileCore(logFile string) (zapcore.Core, error) {
 	encCfg.TimeKey = "ts"
 	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
 
-	return zapcore.NewCore(
-		zapcore.NewJSONEncoder(encCfg),
-		zapcore.AddSync(f),
-		zapcore.DebugLevel,
-	), nil
+	return zapcore.NewCore(zapcore.NewJSONEncoder(encCfg), zapcore.AddSync(f), level), nil
 }
 
-func newConsoleCore(env string) (zapcore.Core, error) {
-	if isDevEnv(env) {
-		cfg := zap.NewDevelopmentConfig()
-		return zapcore.NewCore(
-			zapcore.NewConsoleEncoder(cfg.EncoderConfig),
-			zapcore.AddSync(os.Stderr),
-			cfg.Level,
-		), nil
+func newConsoleCore(dev bool, level zapcore.Level) zapcore.Core {
+	var enc zapcore.Encoder
+	if dev {
+		enc = zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
+	} else {
+		enc = zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
 	}
-
-	cfg := zap.NewProductionConfig()
-	return zapcore.NewCore(
-		zapcore.NewJSONEncoder(cfg.EncoderConfig),
-		zapcore.AddSync(os.Stderr),
-		cfg.Level,
-	), nil
+	return zapcore.NewCore(enc, zapcore.Lock(os.Stderr), level)
 }
 
 // NewLoggerWithCore builds a ZapLogger for tests or custom zap cores.
@@ -187,7 +231,10 @@ func (l *ZapLogger) Sync() error {
 	return err
 }
 
-// isDevEnv mirrors config.IsDevEnv without importing the config package.
+// isDevEnv mirrors config.IsDevEnv without importing the config package:
+// only the registry's developer environments, "local" and "dev", compared
+// trimmed and case-insensitively.
 func isDevEnv(env string) bool {
-	return env == "dev" || env == "development" || env == "local"
+	env = strings.ToLower(strings.TrimSpace(env))
+	return env == "dev" || env == "local"
 }
