@@ -22,3 +22,12 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: [dependencies, docker]
+
+# DISABLED (temporarily) — GitHub only reads .github/dependabot.yml, so this renamed file
+# stops scheduled version-update checks and new Dependabot PRs for gomod,
+# github-actions and docker without losing the configuration.
+#
+# Re-enable:  git mv .github/dependabot.yml.disabled .github/dependabot.yml
+#
+# Note: this does not turn off Dependabot *alerts* or *security updates* —
+# those are repository settings (Settings → Code security).

@@ -160,7 +160,7 @@ platform-gincommon/
 │   ├── observability/                    # The standard as implemented, metric-registry.md (generated), migration, runbooks
 │   └── architecture/                     # Architecture docs + Mermaid sources
 ├── docker/                               # Local otel-collector, Tempo, Prometheus (+ rules, promtool tests), Loki, Promtail, Grafana config
-├── .github/                              # Workflows, shellcheck-clean scripts, dependabot
+├── .github/                              # Workflows, shellcheck-clean scripts, dependabot config (disabled)
 ├── .githooks/pre-commit                  # tidy (fails on drift) + fmt-check + lint + metrics-lint registry/inventory drift
 └── test/                                 # unit/, integration/, e2e/, smoke/, fixtures/, testenv/
 ```
@@ -861,7 +861,7 @@ SemVer over `pkg/*` ([VERSIONING.md](VERSIONING.md)); history in [CHANGELOG.md](
 
 ## CI
 
-Five workflow files; shell logic lives in `.github/scripts/` (shellcheck-clean); every action is pinned to a full commit SHA; Dependabot updates `gomod`, `github-actions` and `docker` weekly (docker bumps need `make pin-base-images`).
+Five workflow files; shell logic lives in `.github/scripts/` (shellcheck-clean); every action is pinned to a full commit SHA; Dependabot version updates are **disabled** (`.github/dependabot.yml.disabled`, re-enable with `git mv .github/dependabot.yml.disabled .github/dependabot.yml`); Dependabot alerts and security updates are repository settings and stay on.
 
 - **`ci.yml`** — orchestrator (push/PR to `main`, skipping Markdown/Mermaid-only commits): `validate-test` ∥ `validate-quality` ∥ `build-image` (Hadolint, `.dockerignore` check, cached amd64 build) → `trivy` (CRITICAL/HIGH/UNKNOWN fails, SARIF, CycloneDX SBOM) and `smoke` (image ≤ 60 MB; an invalid `OBSERVABILITY_DOMAIN` must exit non-zero with the registry error; `/health` ok and `/metrics` exposes `platform_build_info` / `platform_http_requests_total` with identity labels) → `interop` (platform-interop-tests, pinned SHA) → `pr-summary` (one updated PR comment, also on failure) → `push` (main only: demo image to GHCR, Cosign sign + verify).
 - **`validate-test.yml`** (reusable) — `go mod download/verify` → `make test-cover` (unit + integration + e2e, `-race`, `-coverpkg`) → `coverage-gate.sh` (**≥ 98%**) → upload coverage.
