@@ -269,6 +269,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Makefile aligned further with iam-org-membership: explicit test package groups (`TEST_UNIT_PKGS`, `TEST_INT_PKGS`, `TEST_E2E_PKGS`, `TEST_SMOKE_PKGS`, `TEST_INTERNAL_PKGS`), and `test-unit` now also runs the white-box gRPC middleware tests. `make run` frees `APP_PORT`, exports `.env` and passes the git `BUILD_VERSION`. `docker-up`/`docker-down` work without a `.env`. Variables whose defaults already live in `internal/config` or `docker-compose.yml` are no longer redeclared or exported. Every target name CI and the docs use is unchanged.
 
+- **`release.yml` mirrors platform-pgcommon's pipeline:**
+  - **`verify` job first:** dispatch ref, tag on `main`, CHANGELOG section (an rc may use its base version's section), `SOURCE_DATE_EPOCH`, forward-only floating tags.
+  - **Same gates as `ci.yml` at the tag:** validate-test, validate-quality, build-image (Hadolint), trivy (CRITICAL/HIGH/UNKNOWN), smoke and interop, plus `binaries`.
+  - **`push` only when the image matches what was tested:** the image's content fingerprint must equal the one trivy and smoke recorded, checked both before and after the push.
+  - **`publish` signs `checksums.txt`:** Cosign `sign-blob`, shipped as `checksums.txt.sigstore.json`.
+  - **SLSA provenance** is read from the BuildKit image index instead of `cosign download attestation`.
+  - **Image tags:** `X.Y`/`X` only move forward; the demo image still never gets `latest`.
+  - New scripts `image-fingerprint.sh`, `release-image-tags.sh`, `release-checksums.sh` and `changelog-section.sh`; `verify-release-tag.sh`, `verify-changelog-entry.sh`, `extract-release-notes.sh`, `create-github-release.sh` and `export-image-provenance.sh` are aligned with platform-pgcommon.
 
 ## [1.3.0] - 2026-08-18
 

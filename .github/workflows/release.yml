@@ -1,11 +1,64 @@
-# Triggered by version tags (e.g. v1.0.0 or v1.1.0-rc.1).
-# Pipeline: validate → build (tag + CHANGELOG gates, metricslint binaries)
-#           → docker (demo image: CVE scan, SBOM, provenance, Cosign) → publish
+# Release for https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon
+# Triggered by version tags (e.g. v1.5.0 or v1.5.0-rc.1).
 #
-# The GitHub Release is the Go module release consuming services pin to with
-# `go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@vX.Y.Z`.
-# There is no deploy gate: this is a library, and the image is the demo /
-# reference server only (no `latest` tag, never deployed to production).
+# Same pipeline as ci.yml — same job names, same gates, same order — run at
+# the tagged commit, with a release front (tag + CHANGELOG verification) and a
+# release back (binaries, image push, GitHub Release). Mirrors
+# platform-pgcommon's and platform-events' release.yml:
+#
+#   verify ──┬─► validate-test ────┬──► interop ──────────────┐
+#            │                     ├──► binaries ◄── quality ─┤
+#            ├─► build-image ──────┼──► trivy ────────────────┤──► push ──► publish
+#            │                     └──► smoke ────────────────┤
+#            └─► validate-quality ────────────────────────────┘
+#
+# (trivy and smoke need validate-test + build-image, exactly as in ci.yml;
+# binaries needs both validation gates; push needs everything.)
+#
+# Nothing is published until every gate has passed on the exact image that
+# ships. build-image, trivy, smoke and push all build the same Dockerfile at
+# the same commit with the same build args (BUILD_VERSION = the tag,
+# SOURCE_DATE_EPOCH = the commit time), so push is normally a cache hit of the
+# image that was scanned and smoke-tested. That is checked, not assumed: the
+# build is NOT reproducible across builders (a cache miss yields a different
+# binary layer), so trivy and smoke each record a content fingerprint of the
+# image they judged (image-fingerprint.sh: layer diff_ids + os/arch + runtime
+# config; labels excluded because push adds metadata-action's OCI labels), and
+# push compares it twice: on a local build before anything is pushed (a
+# mismatch moves no tag), and on the pushed digest pulled back from GHCR before
+# Cosign signs it (a mismatch leaves it unsigned and stops the GitHub Release).
+#
+# Floating image tags only move forward: release-image-tags.sh (verify job)
+# enables X.Y / X only when the tag is the highest stable version of that
+# minor line / major line, so a hotfix of an older line (v1.3.5 after v1.4.0)
+# gets only its own X.Y.Z (and X.Y if newest there). Pre-releases never move a
+# floating tag. Unlike platform-pgcommon (whose image is the migrate CLI),
+# this image is the demo / reference server and is never deployed, so it gets
+# no `latest` tag: nothing should imply it is a production artefact.
+#
+# workflow_dispatch: GitHub runs this file and the reusable validate-*.yml from
+# the DISPATCHING ref, not from the tag, so verify refuses a dispatch unless
+# github.ref is refs/heads/main or refs/tags/<the tag> (prefer the tag: then
+# the pipeline is the tagged one). The tagged commit must also be reachable
+# from origin/main (verify-release-tag.sh).
+#
+# Signing: the image is Cosign keyless-signed by digest (push); the metricslint
+# binaries' checksums.txt is Cosign keyless-signed with sign-blob in publish,
+# after every gate, and its Sigstore bundle ships as checksums.txt.sigstore.json
+# (README "Releases" has the verification commands). Cosign rather than GitHub
+# artifact attestations, to match the image path and because attestations on a
+# private repo need GitHub Enterprise Cloud. The signer identity is
+# release.yml@refs/tags/vX.Y.Z (or @refs/heads/main for a dispatch from main).
+#
+# Differences from ci.yml, all release-specific: the verify job; checkouts pin
+# the tag; images are tagged X.Y.Z / X.Y / X (metadata-action's semver
+# patterns, no `v`) instead of branch / sha; provenance is mode=max and
+# exported; the Cosign identity must be release.yml at a tag (or main) ref;
+# binaries + publish replace pr-summary.
+#
+# The Go module itself is published by the tag (consumers `go get` it); this
+# workflow additionally ships metricslint (binaries), the demo image and the
+# GitHub Release. There is no deploy gate — nothing is deployed from this repo.
 name: Release
 
 "on":
@@ -16,7 +69,7 @@ name: Release
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v1.0.0)'
+        description: 'Tag to release (e.g. v1.5.0)'
         required: true
 
 permissions:
@@ -28,139 +81,176 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/bcbp-solutions-fzc-llc/platform-gincommon
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  RELEASE_REF: ${{ github.event.inputs.tag || github.ref }}
+  IMAGE_NAME: ghcr.io/bcbp-solutions-fzc-llc/platform-gincommon
+  CI_IMAGE: platform-gincommon-ci-test
+  BUILDKIT_PROGRESS: plain
 
 jobs:
+  # ── fail fast: a wrong tag or a missing CHANGELOG section stops everything
+  verify:
+    name: Verify tag + CHANGELOG
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source_date_epoch: ${{ steps.sde.outputs.SOURCE_DATE_EPOCH }}
+      tag_major: ${{ steps.tags.outputs.major }}
+      tag_minor: ${{ steps.tags.outputs.minor }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      # Dispatch ref (main or the tag), HEAD == tag, tag reachable from
+      # origin/main (fetch-depth 0 above provides origin/main and every tag).
+      - name: Verify release tag (dispatch ref, checkout, on main)
+        run: bash .github/scripts/verify-release-tag.sh
+
+      # Block the release if CHANGELOG.md has no entry for this tag (a
+      # prerelease may use its base version's section).
+      - name: Verify CHANGELOG entry exists
+        run: bash .github/scripts/verify-changelog-entry.sh
+
+      # One SOURCE_DATE_EPOCH for every image build below, so they are
+      # byte-identical and push reuses the scanned image from cache.
+      - name: Set SOURCE_DATE_EPOCH
+        id: sde
+        run: bash .github/scripts/set-source-date-epoch.sh
+
+      # Which floating tags (X.Y / X) this release may move.
+      - name: Select floating image tags
+        id: tags
+        run: bash .github/scripts/release-image-tags.sh
+
+  # ── same as ci.yml ────────────────────────────────────────────────────────
   validate-test:
     name: Validate / Test
+    needs: verify
     uses: ./.github/workflows/validate-test.yml
     secrets: inherit
     with:
       ref: ${{ github.event.inputs.tag || github.ref }}
 
+  # ── same as ci.yml ────────────────────────────────────────────────────────
   validate-quality:
     name: Validate / Quality
+    needs: verify
     uses: ./.github/workflows/validate-quality.yml
     secrets: inherit
     with:
       ref: ${{ github.event.inputs.tag || github.ref }}
 
-  build:
-    name: Build
+  # ── same as ci.yml: Hadolint first, then build into the cache ────────────
+  build-image:
+    name: Build image (cache)
     runs-on: ubuntu-latest
-    needs: [validate-test, validate-quality]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-          fetch-depth: 0
-          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
-
-      - name: Verify release tag matches checkout
-        run: bash .github/scripts/verify-release-tag.sh
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            go.mod
-
-      # Block the release if CHANGELOG.md has no entry for this tag.
-      # Developers must update CHANGELOG.md before tagging.
-      - name: Verify CHANGELOG entry exists
-        run: bash .github/scripts/verify-changelog-entry.sh
-
-      # The demo server must still build at the tag (it exercises the full
-      # middleware stack); it ships only as the image below.
-      - name: Build demo server
-        run: make build
-
-      # Cross-compiles metricslint for linux/amd64, linux/arm64, darwin/amd64,
-      # darwin/arm64 and windows/amd64 with per-binary .sha256 files.
-      - name: Prepare metricslint release binaries (all platforms)
-        run: bash .github/scripts/prepare-release-binary.sh
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: binary-${{ env.RELEASE_TAG }}
-          path: |
-            metricslint_*
-            release-asset.name
-          if-no-files-found: error
-          retention-days: 90
-
-  docker:
-    name: Demo image → GHCR
-    runs-on: ubuntu-latest
-    needs: build
-    outputs:
-      digest: ${{ steps.pushed.outputs.digest }}
-      version: ${{ steps.meta.outputs.version }}
+    needs: verify
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
-      security-events: write
-      actions: read
-      attestations: write
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
           token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
 
-      - name: Set SOURCE_DATE_EPOCH
-        id: sde
-        run: bash .github/scripts/set-source-date-epoch.sh
+      # Same ignore as ci.yml: DL3018 (apk version pins) — base images are
+      # digest-pinned instead.
+      - name: Hadolint
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
+        with:
+          dockerfile: Dockerfile
+          ignore: DL3018
+
+      - name: Check .dockerignore exists
+        run: test -f .dockerignore
+
+      # Cache targets (SOURCE_DATE_EPOCH comes from the verify job instead).
+      - name: Prepare Docker build
+        id: cache
+        env:
+          REGISTRY_REF: ${{ env.IMAGE_NAME }}:buildcache
+          CAN_PUSH: 'true'
+        run: bash .github/scripts/set-build-cache-targets.sh
 
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          # Demo/reference image, not a production artefact: no automatic
-          # 'latest' tag, so nothing implies production-readiness.
-          flavor: |
-            latest=false
-          # Produces: vMAJOR.MINOR.PATCH, vMAJOR.MINOR, vMAJOR.
-          tags: |
-            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
-            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      # Build and load locally first: the CVE gate below must pass BEFORE any
-      # release tag (vX.Y.Z, vX.Y, vX) is moved in GHCR.
-      - name: Build image (local, for scanning)
+      # Always pull the base image for a release (digest-pinned, so this only
+      # verifies the pinned digest is still resolvable).
+      - name: Build image → cache
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: false
+          pull: true
+          cache-from: ${{ steps.cache.outputs.from }}
+          cache-to: ${{ steps.cache.outputs.to }}
+          build-args: |
+            BUILD_VERSION=${{ env.RELEASE_TAG }}
+            SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
+
+  # ── same as ci.yml ────────────────────────────────────────────────────────
+  trivy:
+    name: Trivy CVE scan
+    runs-on: ubuntu-latest
+    needs: [verify, validate-test, build-image]
+    timeout-minutes: 15
+    outputs:
+      fingerprint: ${{ steps.fp.outputs.fingerprint }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      # Restore from GHA cache (all layers cached → near-instant rebuild).
+      - name: Load image from cache
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
           platforms: linux/amd64
           push: false
           load: true
-          tags: platform-gincommon-release-scan
+          tags: ${{ env.CI_IMAGE }}
+          cache-from: type=gha
           build-args: |
             BUILD_VERSION=${{ env.RELEASE_TAG }}
-            SOURCE_DATE_EPOCH=${{ steps.sde.outputs.SOURCE_DATE_EPOCH }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
+
+      # Content fingerprint of the image this job judges; push must match it.
+      - name: Record image fingerprint
+        id: fp
+        run: bash .github/scripts/image-fingerprint.sh "${CI_IMAGE}"
 
       - name: Cache Trivy DB
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
@@ -170,32 +260,41 @@ jobs:
           restore-keys: |
             trivy-db-${{ runner.os }}-
 
-      # Critical/High findings fail the release before anything is pushed —
-      # a known-vulnerable image must never carry a release tag.
-      - name: Scan image for CVEs
+      # Table format: human-readable in CI logs; fails on CRITICAL/HIGH/UNKNOWN.
+      # Scans both the OS layer and the Go binary's module + stdlib versions.
+      - name: Trivy scan — CRITICAL / HIGH / UNKNOWN
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: platform-gincommon-release-scan
-          format: sarif
-          output: trivy-results.sarif
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
+          image-ref: ${{ env.CI_IMAGE }}
+          format: table
           exit-code: '1'
+          severity: CRITICAL,HIGH,UNKNOWN
+          ignore-unfixed: true
           cache-dir: /tmp/trivy-cache
 
-      - name: Upload Trivy results to GitHub Security
+      # SARIF format: uploads to GitHub Security tab.
+      - name: Trivy scan — SARIF upload
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.CI_IMAGE }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '0'
+          ignore-unfixed: true
+          cache-dir: /tmp/trivy-cache
+
+      - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
-        if: always()
         continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
 
       # CycloneDX SBOM — full component inventory for compliance / audit.
-      - name: Generate SBOM
+      # Attached to the GitHub Release by the publish job.
+      - name: Trivy SBOM — CycloneDX
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: platform-gincommon-release-scan
+          image-ref: ${{ env.CI_IMAGE }}
           format: cyclonedx
           output: sbom.cyclonedx.json
           exit-code: '0'
@@ -208,12 +307,187 @@ jobs:
           path: sbom.cyclonedx.json
           retention-days: 90
 
-      # Same inputs + cache as the scanned build, so the layers are reused.
+  # ── same as ci.yml ────────────────────────────────────────────────────────
+  smoke:
+    name: Smoke tests
+    runs-on: ubuntu-latest
+    needs: [verify, validate-test, build-image]
+    timeout-minutes: 10
+    outputs:
+      fingerprint: ${{ steps.fp.outputs.fingerprint }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      # Restore from GHA cache (all layers cached → near-instant rebuild).
+      - name: Load image from cache
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE }}
+          cache-from: type=gha
+          build-args: |
+            BUILD_VERSION=${{ env.RELEASE_TAG }}
+            SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
+
+      # Content fingerprint of the image this job judges; push must match it.
+      - name: Record image fingerprint
+        id: fp
+        run: bash .github/scripts/image-fingerprint.sh "${CI_IMAGE}"
+
+      - name: Smoke tests
+        env:
+          IMAGE: ${{ env.CI_IMAGE }}
+        run: bash .github/scripts/smoke-tests.sh
+
+  # ── same as ci.yml, against the tag ──────────────────────────────────────
+  interop:
+    name: Cross-language compatibility
+    needs: validate-test
+    # Pinned to a commit (the repo has no tags) so the job definition that
+    # receives GO_PRIVATE_TOKEN cannot change under a release. The harness
+    # itself (run_interop.sh, sibling repos) is still checked out at main by
+    # interop.yml, by design. Bump together with ci.yml.
+    uses: BCBP-SOLUTIONS-FZC-LLC/platform-interop-tests/.github/workflows/interop.yml@c7e62e6976274ed4cf9c78f86b5f58467e59afc2 # main 2026-10-02 (no tags yet)
+    with:
+      platform_gincommon_ref: ${{ github.event.inputs.tag || github.ref_name }}
+    secrets:
+      # The only secret interop.yml declares.
+      gh_private_token: ${{ secrets.GO_PRIVATE_TOKEN }}
+
+  # ── release-only: cross-compiled metricslint binaries for the Release ────
+  binaries:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    needs: [validate-test, validate-quality]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The module has no private dependency, so no GO_PRIVATE_TOKEN credential
+      # is written here. If go.mod ever gains a
+      # github.com/BCBP-SOLUTIONS-FZC-LLC/* requirement, restore the
+      # "Configure private module access" step from validate-test.yml.
+      - name: Download modules
+        run: go mod download
+
+      # metricslint for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64,
+      # windows/amd64, each with a .sha256 — also proves it builds everywhere.
+      - name: Prepare release binaries (all platforms)
+        run: bash .github/scripts/prepare-release-binary.sh
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-${{ env.RELEASE_TAG }}
+          path: |
+            metricslint_*
+            release-asset.name
+          if-no-files-found: error
+          retention-days: 90
+
+  # ── same as ci.yml's push, with release tags — only after every gate ──────
+  push:
+    name: Push image → GHCR
+    runs-on: ubuntu-latest
+    needs: [verify, validate-test, validate-quality, trivy, smoke, interop, binaries]
+    timeout-minutes: 25
+    outputs:
+      digest: ${{ steps.pushed.outputs.digest }}
+      version: ${{ steps.meta.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # Cosign keyless signing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # Demo / reference image: never `latest` (see header).
+          flavor: |
+            latest=false
+          # X.Y.Z always; X.Y and X only when this tag is the highest stable
+          # version of that line (verify: release-image-tags.sh), so a hotfix
+          # of an older line never moves them backwards.
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }},enable=${{ needs.verify.outputs.tag_minor == 'true' }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }},enable=${{ needs.verify.outputs.tag_major == 'true' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      # Pre-push gate: build what push will build (same cache sources), load
+      # it, and require trivy's and smoke's fingerprint before any tag moves.
+      - name: Build image locally (pre-push check)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE }}
+          build-args: |
+            BUILD_VERSION=${{ env.RELEASE_TAG }}
+            SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+
+      - name: Verify image matches the gated image (pre-push)
+        env:
+          TRIVY_FP: ${{ needs.trivy.outputs.fingerprint }}
+          SMOKE_FP: ${{ needs.smoke.outputs.fingerprint }}
+        run: bash .github/scripts/image-fingerprint.sh "${CI_IMAGE}" "${TRIVY_FP}" "${SMOKE_FP}"
+
+      # Same Dockerfile, commit and build args as build-image/trivy/smoke →
+      # a cache hit of the image that was scanned and smoke-tested (checked
+      # before and after this step).
       - name: Build and push
         id: pushed
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          file: ./Dockerfile
           platforms: linux/amd64
           push: true
           provenance: mode=max
@@ -222,13 +496,47 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_VERSION=${{ env.RELEASE_TAG }}
-            SOURCE_DATE_EPOCH=${{ steps.sde.outputs.SOURCE_DATE_EPOCH }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      # Post-push gate: pull the pushed digest back and require the same
+      # fingerprint. Runs before signing, so a mismatch is never signed and
+      # the GitHub Release is not created.
+      - name: Verify pushed image matches the gated image
+        env:
+          IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
+          TRIVY_FP: ${{ needs.trivy.outputs.fingerprint }}
+          SMOKE_FP: ${{ needs.smoke.outputs.fingerprint }}
+        run: |
+          docker pull --platform linux/amd64 "${IMAGE_NAME}@${IMAGE_DIGEST}"
+          bash .github/scripts/image-fingerprint.sh "${IMAGE_NAME}@${IMAGE_DIGEST}" "${TRIVY_FP}" "${SMOKE_FP}"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
+      # Keyless signing via Sigstore OIDC — no long-lived key to rotate or leak.
+      - name: Sign image with Cosign
+        env:
+          IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
+
+      - name: Verify image signature
+        env:
+          IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
+          REPO: ${{ github.repository }}
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/release\.yml@refs/(tags/v.+|heads/main)$" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE_NAME}@${IMAGE_DIGEST}"
+
+      # Reads BuildKit's provenance attestation (stored in the image index) —
+      # see the script for why this is not `cosign download attestation`.
       - name: Export SLSA provenance
         env:
           IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
@@ -241,38 +549,34 @@ jobs:
           path: provenance.slsa.json
           retention-days: 90
 
-      # Tag pushes sign with an @refs/tags/... identity; manual (workflow_dispatch)
-      # releases sign with the dispatching branch, so verify accepts both.
-      - name: Sign image with Cosign
-        run: |
-          cosign sign --yes \
-            "${{ env.IMAGE_NAME }}@${{ steps.pushed.outputs.digest }}"
+      - name: Log image digest
+        env:
+          IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: bash .github/scripts/log-image-digest.sh
 
-      - name: Verify image signature
-        run: |
-          cosign verify \
-            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/.github/workflows/.*@refs/(tags/.*|heads/(main|master))$" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            "${{ env.IMAGE_NAME }}@${{ steps.pushed.outputs.digest }}"
-
+  # ── release-only: the GitHub Release consuming services see ──────────────
   publish:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [build, docker]
+    needs: [push]
+    timeout-minutes: 10
     permissions:
       contents: write
+      id-token: write   # Cosign keyless sign-blob of checksums.txt
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
           fetch-depth: 0
+          persist-credentials: false
           token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
 
       - name: Extract release notes from CHANGELOG
         env:
-          IMAGE_VERSION: ${{ needs.docker.outputs.version }}
-          IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
+          IMAGE_VERSION: ${{ needs.push.outputs.version }}
+          IMAGE_DIGEST: ${{ needs.push.outputs.digest }}
         run: bash .github/scripts/extract-release-notes.sh
 
       - name: Download SBOM
@@ -291,8 +595,31 @@ jobs:
           name: binary-${{ env.RELEASE_TAG }}
           path: .
 
+      # Re-checks every per-binary .sha256 from the binaries job, then writes
+      # the aggregate checksums.txt that is signed below.
+      - name: Aggregate checksums
+        run: bash .github/scripts/release-checksums.sh
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Signed after every gate has passed; the bundle (certificate,
+      # signature, Rekor entry) ships as a release asset.
+      - name: Sign checksums with Cosign
+        run: cosign sign-blob --yes --bundle checksums.txt.sigstore.json checksums.txt
+
+      - name: Verify checksums signature
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          cosign verify-blob \
+            --bundle checksums.txt.sigstore.json \
+            --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/release\.yml@refs/(tags/v.+|heads/main)$" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            checksums.txt
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
+          IMAGE_DIGEST: ${{ needs.push.outputs.digest }}
         run: bash .github/scripts/create-github-release.sh

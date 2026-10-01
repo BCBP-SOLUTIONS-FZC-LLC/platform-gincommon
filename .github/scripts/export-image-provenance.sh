@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
-# Downloads SLSA provenance attestation from GHCR and writes provenance.slsa.json.
+# Exports the BuildKit SLSA provenance attestation of the pushed image
+# (build-push-action provenance: mode=max) to provenance.slsa.json.
+#
+# BuildKit stores provenance as an attestation manifest inside the image
+# index, NOT as a cosign attestation, so it is read with `docker buildx
+# imagetools inspect` (Docker's documented method). `.Provenance` is keyed by
+# platform for an index; a single-platform image yields one entry.
 set -euo pipefail
-set -o pipefail
 
 : "${IMAGE_NAME:?IMAGE_NAME is required}"
 : "${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
+PLATFORM="${PLATFORM:-linux/amd64}"
 
 IMAGE_REF="${IMAGE_NAME}@${IMAGE_DIGEST}"
 
-if ! cosign download attestation \
-  --predicate-type=https://slsa.dev/provenance/v1 \
-  "${IMAGE_REF}" \
-  | jq -er 'if type == "array" then .[0].payload else .payload end' \
-  | base64 -d \
-  | jq . \
-  | tee provenance.slsa.json >/dev/null; then
-  echo "::error title=Provenance export::SLSA provenance attestation not found on ${IMAGE_REF}"
+docker buildx imagetools inspect "${IMAGE_REF}" --format '{{json .Provenance}}' > provenance.raw.json
+
+if ! jq -e --arg p "${PLATFORM}" '
+      if type != "object" then empty
+      elif has("SLSA") then .SLSA
+      elif has($p) then .[$p].SLSA
+      else (to_entries[0].value.SLSA) end
+      | select(. != null)' provenance.raw.json > provenance.slsa.json; then
+  echo "::error title=Provenance export::No SLSA provenance found on ${IMAGE_REF} — was the image built with provenance: mode=max?"
   exit 1
 fi
+rm -f provenance.raw.json
 
-echo "  ✔  exported SLSA provenance to provenance.slsa.json"
+echo "  ✔  exported SLSA provenance for ${PLATFORM} to provenance.slsa.json ($(wc -c < provenance.slsa.json) bytes)"
