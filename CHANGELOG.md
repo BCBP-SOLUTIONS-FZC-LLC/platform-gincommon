@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-02
+
 > **Versioning:** this release is tagged **v1.4.0** although it contains breaking changes — a recorded exception to SemVer (see `VERSIONING.md` → *Recorded exceptions*). No consumer had been deployed, and every consuming service is upgraded in lockstep. Follow the *Upgrading to v1.4.0* checklist in `README.md`.
 
 ### Added
