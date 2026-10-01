@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`release.yml`: release builds use their own GHA cache scope** (`release-<tag>`). `build-image` exports to it, and `trivy`, `smoke` and `push` read only from it.
+  - On the first v1.4.0 run, `push` resolved the Go build from main's shared `ci.yml` cache, a record with identical inputs but a different binary, since the build is not byte-reproducible across builders.
+  - The image-fingerprint gate rejected it before anything was pushed or signed.
+
 ## [1.4.0] - 2026-10-02
 
 > **Versioning:** this release is tagged **v1.4.0** although it contains breaking changes — a recorded exception to SemVer (see `VERSIONING.md` → *Recorded exceptions*). No consumer had been deployed, and every consuming service is upgraded in lockstep. Follow the *Upgrading to v1.4.0* checklist in `README.md`.
