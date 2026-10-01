@@ -27,6 +27,9 @@
 # push compares it twice: on a local build before anything is pushed (a
 # mismatch moves no tag), and on the pushed digest pulled back from GHCR before
 # Cosign signs it (a mismatch leaves it unsigned and stops the GitHub Release).
+# All of them share one GHA cache scope owned by the release (RELEASE_CACHE):
+# build-image exports to it and trivy / smoke / push read only from it, so a
+# shared cache (main's ci.yml runs) can never supply push a different build.
 #
 # Floating image tags only move forward: release-image-tags.sh (verify job)
 # enables X.Y / X only when the tag is the highest stable version of that
@@ -86,6 +89,13 @@ env:
   RELEASE_REF: ${{ github.event.inputs.tag || github.ref }}
   IMAGE_NAME: ghcr.io/bcbp-solutions-fzc-llc/platform-gincommon
   CI_IMAGE: platform-gincommon-ci-test
+  # GHA cache scope owned by this release. build-image exports the build to it
+  # and trivy / smoke / push read ONLY from it, so all three resolve the same
+  # build records. The Go build is not byte-reproducible across builders, so a
+  # shared scope (e.g. main's ci.yml cache) can hand push a record with
+  # identical inputs but a different binary, which the fingerprint gate then
+  # (correctly) rejects. Seen on the first v1.4.0 run.
+  RELEASE_CACHE: release-${{ github.event.inputs.tag || github.ref_name }}
   BUILDKIT_PROGRESS: plain
 
 jobs:
@@ -174,14 +184,6 @@ jobs:
       - name: Check .dockerignore exists
         run: test -f .dockerignore
 
-      # Cache targets (SOURCE_DATE_EPOCH comes from the verify job instead).
-      - name: Prepare Docker build
-        id: cache
-        env:
-          REGISTRY_REF: ${{ env.IMAGE_NAME }}:buildcache
-          CAN_PUSH: 'true'
-        run: bash .github/scripts/set-build-cache-targets.sh
-
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
@@ -193,7 +195,9 @@ jobs:
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       # Always pull the base image for a release (digest-pinned, so this only
-      # verifies the pinned digest is still resolvable).
+      # verifies the pinned digest is still resolvable). May warm from the
+      # shared caches; whatever it builds becomes the release's source of truth
+      # and is exported to the release-scoped cache only.
       - name: Build image → cache
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -203,8 +207,11 @@ jobs:
           push: false
           load: false
           pull: true
-          cache-from: ${{ steps.cache.outputs.from }}
-          cache-to: ${{ steps.cache.outputs.to }}
+          cache-from: |
+            type=gha,scope=${{ env.RELEASE_CACHE }}
+            type=gha
+            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=gha,mode=max,scope=${{ env.RELEASE_CACHE }}
           build-args: |
             BUILD_VERSION=${{ env.RELEASE_TAG }}
             SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
@@ -232,7 +239,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      # Restore from GHA cache (all layers cached → near-instant rebuild).
+      # Restore from the release-scoped cache (all layers cached → near-instant
+      # rebuild of exactly what build-image built).
       - name: Load image from cache
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -242,7 +250,7 @@ jobs:
           push: false
           load: true
           tags: ${{ env.CI_IMAGE }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ env.RELEASE_CACHE }}
           build-args: |
             BUILD_VERSION=${{ env.RELEASE_TAG }}
             SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
@@ -326,7 +334,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      # Restore from GHA cache (all layers cached → near-instant rebuild).
+      # Restore from the release-scoped cache (all layers cached → near-instant
+      # rebuild of exactly what build-image built).
       - name: Load image from cache
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -336,7 +345,7 @@ jobs:
           push: false
           load: true
           tags: ${{ env.CI_IMAGE }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ env.RELEASE_CACHE }}
           build-args: |
             BUILD_VERSION=${{ env.RELEASE_TAG }}
             SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
@@ -469,9 +478,7 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ env.RELEASE_TAG }}
             SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
-          cache-from: |
-            type=gha
-            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-from: type=gha,scope=${{ env.RELEASE_CACHE }}
 
       - name: Verify image matches the gated image (pre-push)
         env:
@@ -479,9 +486,9 @@ jobs:
           SMOKE_FP: ${{ needs.smoke.outputs.fingerprint }}
         run: bash .github/scripts/image-fingerprint.sh "${CI_IMAGE}" "${TRIVY_FP}" "${SMOKE_FP}"
 
-      # Same Dockerfile, commit and build args as build-image/trivy/smoke →
-      # a cache hit of the image that was scanned and smoke-tested (checked
-      # before and after this step).
+      # Same Dockerfile, commit, build args and release-scoped cache as
+      # build-image/trivy/smoke → a cache hit of the image that was scanned and
+      # smoke-tested (checked before and after this step).
       - name: Build and push
         id: pushed
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -497,12 +504,7 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ env.RELEASE_TAG }}
             SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
-          cache-from: |
-            type=gha
-            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
-          cache-to: |
-            type=gha,mode=max
-            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+          cache-from: type=gha,scope=${{ env.RELEASE_CACHE }}
 
       # Post-push gate: pull the pushed digest back and require the same
       # fingerprint. Runs before signing, so a mismatch is never signed and
