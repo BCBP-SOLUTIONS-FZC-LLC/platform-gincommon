@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Component | `platform-gincommon` (shared Gin HTTP + gRPC transport and observability library) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon` (`go 1.26.0`, `toolchain go1.26.6`) |
-| Status | `v1.4.0` release candidate — code complete, `make ci` green, coverage 99.0% |
+| Status | `v1.4.0` released 2026-10-02 — `make ci` and PR #30 CI green, coverage 98.9% |
 | Previous release | `v1.3.0` (pinned by all 11 IAM services today) |
 | Governing standard | Enterprise Platform Observability Standard ([`docs/observability/README.md`](../observability/README.md)) |
 | Base HLD | IAM HLD — shared library dependencies (§15.4), Clean Architecture layout (§15.3) |
@@ -1342,4 +1342,4 @@ Three review rounds against the code, each followed by fixes, tests and a green 
 | 2 | Consumers could not implement `Authorizer` (internal type in signature); gRPC health prefix-match auth bypass; provisional-provider replacement dropped spans; `ErrAbortHandler` counted as panic/5xx; HTTP accepted repeated identity | `TestConsumerAuthorizer_*`; `TestGRPC_HealthPrefixNearMissRequiresAuth`; `TestReplacement_*`; `TestObservabilityMiddlewares_ErrAbortHandler_FullChain`; `TestProtectedMiddlewares_RepeatedIdentityHeader401` |
 | 3 | Panic after a partial write looked like a complete 200; wrapped abort still logged by net/http; startup depended on stack build order (unknown version); gRPC stream observability disagreed with the client on timeout; `Shutdown` stranded captured providers; README examples did not compile/start | partial-write and wrapped-abort tests; `TestUnknownFirstThenRealVersionUpgrades`; `TestGRPC_StreamTimeoutInnermost_MetricsMatchClient`; `TestShutdown_CapturedProviderLiveAfterReinit` |
 
-Full per-change detail: [CHANGELOG.md](../../CHANGELOG.md) `[Unreleased]` (to be released as `[1.4.0]`).
+Full per-change detail: [CHANGELOG.md](../../CHANGELOG.md) `[1.4.0]`.
