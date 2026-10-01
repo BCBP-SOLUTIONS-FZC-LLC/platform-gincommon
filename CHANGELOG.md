@@ -148,6 +148,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Production hardening, review 2 — gRPC:**
   - **gRPC health exemption is now an exact match.** The auth, context and authz interceptors (unary and stream) exempt only `/grpc.health.v1.Health/Check`, `/Watch` and `/List` (the `grpc_health_v1` `*_FullMethodName` constants). Before, any path starting with `/grpc.health.v1.Health/` was exempt, so with `grpc.UnknownServiceHandler` a caller could reach e.g. `/grpc.health.v1.Health/x/admin.Svc/Delete` and skip `RequireAuth`, `ContextInterceptor` and `RequirePermission`. Near-miss paths (`/Health/CheckX`, `/HealthX/Check`, `/Health/x/a.B/C`, a trailing slash) are now authenticated like any other method.
+- **Dependencies upgraded to their latest releases:**
+  - OpenTelemetry `v1.45.0` → `v1.46.0` (otel, sdk, trace, otlptracegrpc)
+  - `google.golang.org/grpc` `v1.83.2` → `v1.84.0`
+  - `prometheus/common` `v0.70.1` → `v0.72.0`, `prometheus/client_model` `v0.6.2` → `v0.6.3`
+  - `google.golang.org/protobuf` `v1.36.11` → `v1.36.12`
+  - indirect `golang.org/x/*`, genproto and testify patch releases
+
+  govulncheck reports no vulnerabilities. The `go 1.26.0` directive is unchanged.
+- **Demo image:** the runtime stage upgrades `libssl3`/`libcrypto3` to `3.3.7-r2` (CVE-2026-75804, CVE-2026-84782, HIGH), which the pinned `alpine:3.21` digest predates. Found by the first CI Trivy run.
 
 ### Removed (breaking)
 
