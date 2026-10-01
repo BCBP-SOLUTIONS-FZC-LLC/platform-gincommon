@@ -14,8 +14,8 @@ func TestRequestBodySize(t *testing.T) {
 	if got := metrics.RequestBodySize(0); got != 0 {
 		t.Fatalf("got %v want 0", got)
 	}
-	if got := metrics.RequestBodySize(-1); got != 0 {
-		t.Fatalf("unknown length: got %v want 0", got)
+	if got := metrics.RequestBodySize(-1); got != metrics.UnknownSize {
+		t.Fatalf("unknown length: got %v want UnknownSize", got)
 	}
 }
 

@@ -4,10 +4,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
 )
 
 func TestMain(m *testing.M) {
-	metrics.Init("metrics-test", "1.0.0-test")
+	fixtures.InitMetrics("metrics-test", "1.0.0-test")
 	os.Exit(m.Run())
 }

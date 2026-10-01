@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	gootel "go.opentelemetry.io/otel"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
 )
@@ -19,12 +18,11 @@ func TestInit_InvalidEndpointStillSetsTracerProvider(t *testing.T) {
 		t.Fatal("expected non-nil shutdown func")
 	}
 
-	tp, ok := gootel.GetTracerProvider().(*sdktrace.TracerProvider)
-	if !ok {
-		t.Fatalf("tracer provider type = %T", gootel.GetTracerProvider())
+	if !otel.IsGlobalProvider(gootel.GetTracerProvider()) || otel.SDKProvider() == nil {
+		t.Fatalf("tracer provider type = %T, want the package delegating provider", gootel.GetTracerProvider())
 	}
 
-	_, span := tp.Tracer("test").Start(context.Background(), "ping")
+	_, span := gootel.Tracer("test").Start(context.Background(), "ping")
 	defer span.End()
 
 	traceID := span.SpanContext().TraceID().String()
@@ -38,10 +36,10 @@ func TestEnsureInit_SkipsWhenProviderAlreadyInstalled(t *testing.T) {
 	t.Cleanup(otel.Shutdown)
 
 	otel.Init("first", "1.0.0", "")
-	first := gootel.GetTracerProvider()
+	first := otel.SDKProvider()
 
 	otel.EnsureInit("second", "2.0.0", "")
-	if gootel.GetTracerProvider() != first {
+	if otel.SDKProvider() != first {
 		t.Fatal("EnsureInit replaced an existing SDK TracerProvider")
 	}
 }
@@ -72,8 +70,8 @@ func TestInitTelemetry_WithBaggage(t *testing.T) {
 	if shutdown == nil {
 		t.Fatal("expected non-nil shutdown func")
 	}
-	if _, ok := gootel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
-		t.Fatalf("tracer provider type = %T, want *sdktrace.TracerProvider", gootel.GetTracerProvider())
+	if !otel.IsGlobalProvider(gootel.GetTracerProvider()) || otel.SDKProvider() == nil {
+		t.Fatalf("tracer provider type = %T, want the package delegating provider", gootel.GetTracerProvider())
 	}
 }
 
@@ -87,14 +85,14 @@ func TestEnsureInitTelemetry_ReplacesNoopProvider(t *testing.T) {
 
 	// EnsureInit when provider is noop → should install a new SDK provider.
 	otel.EnsureInit("ensure-svc", "1.0.0", "")
-	if _, ok := gootel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
-		t.Fatalf("after EnsureInit, provider type = %T, want *sdktrace.TracerProvider", gootel.GetTracerProvider())
+	if !otel.IsGlobalProvider(gootel.GetTracerProvider()) || otel.SDKProvider() == nil {
+		t.Fatalf("after EnsureInit, provider type = %T, want the package delegating provider", gootel.GetTracerProvider())
 	}
 
 	// EnsureInit again → SDK provider already set; must be a no-op (no second install).
-	first := gootel.GetTracerProvider()
+	first := otel.SDKProvider()
 	otel.EnsureInit("ensure-svc-2", "2.0.0", "")
-	if gootel.GetTracerProvider() != first {
+	if otel.SDKProvider() != first {
 		t.Fatal("second EnsureInit replaced an already-installed SDK TracerProvider")
 	}
 }

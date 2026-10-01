@@ -24,9 +24,18 @@ func main() {
 	// log.Fatal / log.Fatalf call os.Exit(1) which bypasses defer, so we
 	// never use log.Fatal here.
 
+	// Consumers copy this server: always bound header/body reads and keep-alive idling
+	// so slow or idle clients (slowloris) cannot pin connections and goroutines.
+	// WriteTimeout is left unset: it would cut off slow-but-legitimate responses and is
+	// better enforced per request with gincommon.Config.RequestTimeout, which the demo
+	// router sets to server.DemoRequestTimeout.
 	srv := &http.Server{
-		Addr:    config.AppAddr(),
-		Handler: router,
+		Addr:              config.AppAddr(),
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	quit := make(chan os.Signal, 1)

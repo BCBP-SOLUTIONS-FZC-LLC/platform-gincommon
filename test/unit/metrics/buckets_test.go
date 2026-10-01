@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
@@ -40,8 +41,13 @@ func TestPayloadSizeBuckets_AreIAMTuned(t *testing.T) {
 	if b[0] != 128 {
 		t.Fatalf("first bucket = %v, want 128B", b[0])
 	}
-	if b[len(b)-1] != 1048576 {
-		t.Fatalf("last bucket = %v, want 1MiB tail", b[len(b)-1])
+	if b[len(b)-1] != 16777216 {
+		t.Fatalf("last bucket = %v, want 16MiB tail", b[len(b)-1])
+	}
+	// The gRPC default max message size (4 MiB) must be a bucket boundary so
+	// near-limit messages are distinguishable from oversized ones.
+	if !slices.Contains(b, 4194304) {
+		t.Fatalf("expected a 4MiB bucket (gRPC default max message size), got %v", b)
 	}
 
 	// Dense coverage from 512B through 16KiB for typical policy/token JSON.

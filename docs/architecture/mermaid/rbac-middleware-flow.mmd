@@ -1,29 +1,34 @@
 sequenceDiagram
-    participant H as Handler (Gin)
-    participant AZ as AuthZMiddleware
-    participant SVC as port.Authorizer
+    participant Chain as Protected chain (RequireAuth + Context)
+    participant AZ as AuthZMiddleware / AuthZ interceptor
+    participant A as Authorizer (consumer-implemented)
+    participant H as Handler
 
-    H ->>+ AZ: c.Next() reaches AuthZMiddleware
+    Chain ->>+ AZ: next (per route / per RPC)
 
-    alt RequestContext missing from Gin context
-        AZ -->> H: 500 Internal Server Error\n"request context missing"
-    else RequestContext wrong type
-        AZ -->> H: 500 Internal Server Error\n"invalid request context"
-    else RequestContext valid
-        AZ ->>+ SVC: Authorize(userID, roles, action, resource)
-
-        alt auth.Authorize returns ErrForbidden
-            SVC -->> AZ: ErrForbidden
-            Note over AZ: logger.Warn "authz: access denied"\n{user_id, roles, action, resource}
-            AZ -->> H: 403 Forbidden
-        else auth.Authorize returns other error
-            SVC -->> AZ: error
-            Note over AZ: logger.Error "authz: internal authorization error"
-            AZ -->> H: 500 Internal Server Error
-        else auth.Authorize returns nil
-            SVC -->>- AZ: nil
-            AZ ->>+ H: c.Next() — handler runs
-            H -->>- AZ: return
+    alt gRPC health method (exact match)
+        AZ ->> H: bypass
+    else no RequestContext in context (RequirePermission placed before Protected*)
+        AZ -->> Chain: HTTP 500 · gRPC FailedPrecondition<br/>"request context missing — ensure ProtectedUnaryInterceptors ran first"
+    else authorizer is nil
+        AZ -->> Chain: 500 / codes.Internal "internal server error"
+    else RequestContext present
+        AZ ->>+ A: Authorize(ctx, rc, action, resource)
+        Note over A: ctx carries deadline, cancellation, trace span<br/>rc carries TenantID, UserID, Roles — tenant-scoped policy
+        alt error wraps ErrForbidden
+            A -->> AZ: ErrForbidden
+            Note over AZ: warn "authz: access denied"<br/>{tenant_id, user_id, roles, action, resource}
+            AZ -->> Chain: 403 / codes.PermissionDenied "forbidden"
+        else any other error
+            A -->> AZ: err
+            Note over AZ: error "authz: internal error" (sanitized)<br/>detail never sent to the client
+            AZ -->> Chain: 500 / codes.Internal "internal server error"
+        else nil
+            A -->>- AZ: nil
+            AZ ->>+ H: next
+            H -->>- AZ: response
         end
     end
-    AZ -->>- H: return
+    AZ -->>- Chain: return
+
+    Note over AZ,A: NewDemoRBAC (reference only): read → allow · delete → admin role · everything else → deny · nil rc → deny

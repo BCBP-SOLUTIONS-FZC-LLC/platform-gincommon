@@ -173,9 +173,9 @@ func TestLoggingMiddleware_SanitizesLongHeaderWithRuneBoundary(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	uid, ok := log.Fields["user_id"]
+	uid, ok := log.Fields["claimed_user_id"]
 	if !ok {
-		t.Fatal("expected user_id field in log")
+		t.Fatal("expected claimed_user_id field in log")
 	}
 	s, _ := uid.(string)
 	if len(s) > 256 {
@@ -210,9 +210,9 @@ func TestLoggingMiddleware_SanitizesLongHeaderValue(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	uid, ok := log.Fields["user_id"]
+	uid, ok := log.Fields["claimed_user_id"]
 	if !ok {
-		t.Fatal("expected user_id field")
+		t.Fatal("expected claimed_user_id field")
 	}
 	if s, _ := uid.(string); len(s) > 256 {
 		t.Fatalf("user_id len = %d, want ≤ 256", len(s))

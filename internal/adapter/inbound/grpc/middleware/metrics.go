@@ -22,16 +22,16 @@ func UnaryMetricsInterceptor() grpc.UnaryServerInterceptor {
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (resp any, err error) {
-		if metrics.GrpcRequestsTotal == nil || metrics.GrpcInflight == nil {
+		if !metrics.GRPCEnabled() {
 			return handler(ctx, req)
 		}
 		method := label.GRPCMethod(info.FullMethod)
-		metrics.GrpcInflight.WithLabelValues(method).Inc()
+		metrics.GRPCInflightInc(method)
 		start := time.Now()
 		panicked := true
 
 		defer func() {
-			metrics.GrpcInflight.WithLabelValues(method).Dec()
+			metrics.GRPCInflightDec(method)
 			observeErr := err
 			if panicked {
 				metrics.RecordGRPCPanic(method)
@@ -56,17 +56,17 @@ func StreamMetricsInterceptor() grpc.StreamServerInterceptor {
 		info *grpc.StreamServerInfo,
 		handler grpc.StreamHandler,
 	) (err error) {
-		if metrics.GrpcRequestsTotal == nil || metrics.GrpcInflight == nil {
+		if !metrics.GRPCEnabled() {
 			return handler(srv, ss)
 		}
 		method := label.GRPCMethod(info.FullMethod)
-		metrics.GrpcInflight.WithLabelValues(method).Inc()
+		metrics.GRPCInflightInc(method)
 		wrapped := &monitoredServerStream{ServerStream: ss}
 		start := time.Now()
 		panicked := true
 
 		defer func() {
-			metrics.GrpcInflight.WithLabelValues(method).Dec()
+			metrics.GRPCInflightDec(method)
 			observeErr := err
 			if panicked {
 				metrics.RecordGRPCPanic(method)
@@ -83,11 +83,9 @@ func StreamMetricsInterceptor() grpc.StreamServerInterceptor {
 }
 
 func observeGRPC(method string, elapsed time.Duration, err error, reqSize, respSize float64) {
-	st, _ := status.FromError(err)
-	code := st.Code()
-	if code == codes.OK && err != nil {
-		code = codes.Unknown
-	}
+	// grpcCode classifies plain context errors as DeadlineExceeded/Canceled
+	// (what grpc-go sends) instead of Unknown, and never reports an error as OK.
+	code := grpcCode(err)
 
 	if code == codes.ResourceExhausted {
 		metrics.RecordGRPCRateLimited(method)

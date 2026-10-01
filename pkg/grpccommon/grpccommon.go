@@ -19,13 +19,29 @@ import (
 type Config struct {
 	// ServiceName is required for Prometheus const labels (panics if empty in Full* functions).
 	ServiceName string
-	// BuildVersion is the Prometheus version label; empty becomes "unknown".
+	// BuildVersion is the Prometheus version label; empty uses BUILD_VERSION env, then "unknown".
 	BuildVersion string
 	// Logger is used by logging and panic recovery interceptors; nil disables logging.
 	Logger port.Logger
 	// Tracing overrides OTEL_* env vars when non-nil fields are set.
 	// If nil, values are read from environment variables.
 	Tracing *TracingOptions
+	// Domain and Environment are the required observability identity, exactly
+	// as in gincommon.Config: Domain (else OBSERVABILITY_DOMAIN) and Environment
+	// (else APP_ENV, then ENVIRONMENT) become the domain/environment const
+	// labels; the interceptor constructors panic when they are missing or
+	// rejected by the registry.
+	Domain      string
+	Environment string
+}
+
+func initMetrics(cfg Config) {
+	metrics.MustInitFromConfig(metrics.Options{
+		ServiceName:  cfg.ServiceName,
+		BuildVersion: cfg.BuildVersion,
+		Domain:       cfg.Domain,
+		Environment:  cfg.Environment,
+	})
 }
 
 // TracingOptions overrides OpenTelemetry settings for gRPC observability interceptors.
@@ -38,16 +54,14 @@ type TracingOptions struct {
 	SampleRatio *float64
 	// EnableBaggage enables W3C baggage propagation when non-nil.
 	EnableBaggage *bool
+	// IgnoreRemoteParentSampled, when non-nil, overrides
+	// OTEL_TRACES_IGNORE_REMOTE_PARENT_SAMPLED (see gincommon.TracingOptions).
+	IgnoreRemoteParentSampled *bool
 }
 
 // resolveGRPCTelemetry builds a TelemetryConfig from env defaults, overridden by cfg.Tracing.
 func resolveGRPCTelemetry(cfg Config) otelsetup.TelemetryConfig {
-	tc := otelsetup.TelemetryConfig{
-		Endpoint:      config.OtelExporterEndpoint(),
-		Insecure:      config.OtelExporterInsecure(),
-		SampleRatio:   config.OtelTraceSampleRatio(),
-		EnableBaggage: config.OtelEnableBaggage(),
-	}
+	tc := otelsetup.EnvConfig(cfg.Domain, cfg.Environment, cfg.Logger)
 	if cfg.Tracing == nil {
 		return tc
 	}
@@ -63,6 +77,9 @@ func resolveGRPCTelemetry(cfg Config) otelsetup.TelemetryConfig {
 	if cfg.Tracing.EnableBaggage != nil {
 		tc.EnableBaggage = *cfg.Tracing.EnableBaggage
 	}
+	if cfg.Tracing.IgnoreRemoteParentSampled != nil {
+		tc.IgnoreRemoteParentSampled = *cfg.Tracing.IgnoreRemoteParentSampled
+	}
 	return tc
 }
 
@@ -73,7 +90,7 @@ func ObservabilityUnaryInterceptors(cfg Config) []grpc.UnaryServerInterceptor {
 	if cfg.ServiceName == "" {
 		panic("grpccommon.Config.ServiceName is required")
 	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
+	initMetrics(cfg)
 	version := cfg.BuildVersion
 	if version == "" {
 		version = config.BuildVersion()
@@ -94,7 +111,7 @@ func ObservabilityStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor 
 	if cfg.ServiceName == "" {
 		panic("grpccommon.Config.ServiceName is required")
 	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
+	initMetrics(cfg)
 	version := cfg.BuildVersion
 	if version == "" {
 		version = config.BuildVersion()
@@ -129,59 +146,24 @@ func ProtectedStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor {
 }
 
 // FullUnaryInterceptors returns the complete interceptor stack for unary RPCs:
-// panic recovery → request ID → tracing → metrics → auth → context → logging.
+// panic recovery → request ID → tracing → metrics → logging → auth → context —
+// i.e. ObservabilityUnaryInterceptors followed by ProtectedUnaryInterceptors.
 //
-// Logging is placed last (innermost) so its deferred log entry runs with the
-// fully-enriched context — including user_id and tenant_id from ContextInterceptor.
-// ObservabilityUnaryInterceptors places logging before auth and context, which means
-// those fields would always be absent from log entries when using that helper alone.
+// Logging wraps auth, so calls rejected by RequireAuth (codes.Unauthenticated)
+// still produce a grpc_request log entry at Warn. Authenticated calls still carry
+// user_id and tenant_id: the context interceptor hands the verified RequestContext
+// back to the logging interceptor after it is built.
+// Panics if cfg.ServiceName is empty.
 func FullUnaryInterceptors(cfg Config) []grpc.UnaryServerInterceptor {
-	if cfg.ServiceName == "" {
-		panic("grpccommon.Config.ServiceName is required")
-	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
-	version := cfg.BuildVersion
-	if version == "" {
-		version = config.BuildVersion()
-	}
-	otelsetup.EnsureInitTelemetry(cfg.ServiceName, version, resolveGRPCTelemetry(cfg))
-	ctxSvc := service.NewContextService()
-	return []grpc.UnaryServerInterceptor{
-		mw.UnaryPanicRecoveryInterceptor(cfg.Logger),
-		mw.UnaryRequestIDInterceptor(),
-		mw.UnaryTracingInterceptor(cfg.ServiceName),
-		mw.UnaryMetricsInterceptor(),
-		mw.UnaryRequireAuthInterceptor(),
-		mw.UnaryContextInterceptor(ctxSvc),
-		mw.UnaryLoggingInterceptor(cfg.Logger),
-	}
+	return append(ObservabilityUnaryInterceptors(cfg), ProtectedUnaryInterceptors(cfg)...)
 }
 
 // FullStreamInterceptors returns the complete interceptor stack for streaming RPCs:
-// panic recovery → request ID → tracing → metrics → auth → context → logging.
-//
-// Logging is placed last (innermost) so its deferred log entry sees the enriched
-// stream context from StreamContextInterceptor (containing user_id and tenant_id).
+// panic recovery → request ID → tracing → metrics → logging → auth → context.
+// Same ordering and logging semantics as FullUnaryInterceptors.
+// Panics if cfg.ServiceName is empty.
 func FullStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor {
-	if cfg.ServiceName == "" {
-		panic("grpccommon.Config.ServiceName is required")
-	}
-	metrics.Init(cfg.ServiceName, cfg.BuildVersion)
-	version := cfg.BuildVersion
-	if version == "" {
-		version = config.BuildVersion()
-	}
-	otelsetup.EnsureInitTelemetry(cfg.ServiceName, version, resolveGRPCTelemetry(cfg))
-	ctxSvc := service.NewContextService()
-	return []grpc.StreamServerInterceptor{
-		mw.StreamPanicRecoveryInterceptor(cfg.Logger),
-		mw.StreamRequestIDInterceptor(),
-		mw.StreamTracingInterceptor(cfg.ServiceName),
-		mw.StreamMetricsInterceptor(),
-		mw.StreamRequireAuthInterceptor(),
-		mw.StreamContextInterceptor(ctxSvc),
-		mw.StreamLoggingInterceptor(cfg.Logger),
-	}
+	return append(ObservabilityStreamInterceptors(cfg), ProtectedStreamInterceptors(cfg)...)
 }
 
 // DefaultUnaryInterceptors returns ObservabilityUnaryInterceptors for backward compatibility.

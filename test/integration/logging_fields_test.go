@@ -135,7 +135,7 @@ func TestLoggingMiddleware_Integration_ErrorFor5xx(t *testing.T) {
 	}
 }
 
-func TestPropagateHeaders_Integration(t *testing.T) {
+func TestPropagateIdentityHeaders_Integration(t *testing.T) {
 	log := &integrationLogger{}
 
 	gin.SetMode(gin.TestMode)
@@ -150,7 +150,7 @@ func TestPropagateHeaders_Integration(t *testing.T) {
 	var outboundReq *http.Request
 	r.GET("/proxy", func(c *gin.Context) {
 		out, _ := http.NewRequest(http.MethodGet, "http://downstream/api", nil)
-		gincommon.PropagateHeaders(c, out)
+		gincommon.PropagateIdentityHeaders(c, out)
 		outboundReq = out
 		c.Status(http.StatusOK)
 	})

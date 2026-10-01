@@ -7,48 +7,64 @@ sequenceDiagram
     participant CH as CorrelationHeaders
     participant ME as Metrics
     participant LO as Logging
+    participant TO as Timeout (when RequestTimeout set)
     participant AU as RequireAuth
     participant CM as ContextMiddleware
     participant H as Handler
 
+    Note over Client,GW: Gateway authenticates the caller, strips client identity headers<br/>and REPLACES x-user-id / x-tenant-id / x-tenant-roles
+
     Client ->>+ GW: HTTP request
-    GW ->>+ PR: x-user-id, x-tenant-id injected
-    Note over PR: defer recover()<br/>returns 500 on panic
+    GW ->>+ PR: request + gateway identity headers
+    Note over PR: defer recover() — outermost
 
     PR ->>+ RI: c.Next()
-    Note over RI: read/generate x-request-id<br/>echo X-Request-ID in response
+    Note over RI: reuse x-request-id if valid ([A-Za-z0-9._-], max 128)<br/>else generate UUID · set X-Request-ID header
 
     RI ->>+ TR: c.Next()
-    Note over TR: extract traceparent<br/>start OTel HTTP span<br/>echo X-Trace-ID in response
+    Note over TR: extract W3C traceparent (ParentBased sampler)<br/>start server span · bounded method (_OTHER) · route template
 
     TR ->>+ CH: c.Next()
-    Note over CH: propagate trace/correlation<br/>headers to downstream calls
+    Note over CH: set X-Trace-ID + X-Request-ID BEFORE c.Next()<br/>(headers set after the body is written never reach the client)
 
     CH ->>+ ME: c.Next()
-    Note over ME: record http_active_requests +1<br/>defer: observe duration, size, status
+    Note over ME: platform_http_active_requests +1<br/>defer: requests_total · duration · sizes (unknown length skipped)
 
     ME ->>+ LO: c.Next()
-    Note over LO: defer: write http_request log<br/>after response (sanitizes headers)
+    Note over LO: defer: http_request log after the response
 
-    LO ->>+ AU: c.Next()
-    alt x-user-id or x-tenant-id missing/invalid
-        AU -->> Client: 401 Unauthorized
-    else headers valid
+    LO ->>+ TO: c.Next()
+    Note over TO: context.WithTimeout(RequestTimeout)
+
+    TO ->>+ AU: c.Next()
+    alt missing, blank, oversized or REPEATED x-user-id / x-tenant-id
+        Note over AU: warn "auth: request rejected"<br/>claimed ids sanitized, 256-byte cap
+        AU -->> TO: 401 {error, status, trace_id, request_id}
+    else identity valid
         AU ->>+ CM: c.Next()
-        Note over CM: build RequestContext<br/>{UserID, TenantID, Roles, TraceID}<br/>store in Gin context
-
-        CM ->>+ H: c.Next()
-        H -->>- CM: response written
+        alt x-tenant-roles over 4096 bytes or 64 roles
+            CM -->> AU: 401 invalid tenant roles (identity logged as claimed_*)
+        else ok
+            Note over CM: RequestContext{UserID, TenantID, Roles, TraceID, ClientIP}
+            CM ->>+ H: c.Next()
+            H -->>- CM: response written (honours c.Request.Context())
+        end
         CM -->>- AU: return
-        AU -->>- LO: return
     end
+    AU -->>- TO: return
+    alt deadline exceeded and nothing written / status still 200
+        Note over TO: platform_http_request_timeouts_total +1
+        TO -->> LO: 503 request timeout
+    end
+    TO -->>- LO: return
 
     LO -->>- ME: return
-    Note over LO: http_request log written
+    Note over LO: Info 2xx · Warn 4xx · Error 5xx<br/>tenant_id/user_id verified only, else claimed_*
     ME -->>- CH: return
-    Note over ME: metrics observed
+    Note over ME: status recorded = status sent
     CH -->>- TR: return
     TR -->>- RI: return
+    Note over TR: span status + http.response.status_code, span ended
     RI -->>- PR: return
     PR -->>- GW: return
-    GW -->>- Client: HTTP response
+    GW -->>- Client: response + X-Trace-ID + X-Request-ID

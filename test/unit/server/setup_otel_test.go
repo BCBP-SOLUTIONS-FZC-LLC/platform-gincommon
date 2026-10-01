@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/server"
 )
 
@@ -23,7 +23,11 @@ func TestSetup_InitializesTracerProviderWithoutExporter(t *testing.T) {
 	if router == nil {
 		t.Fatal("expected router")
 	}
-	if _, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
-		t.Fatalf("tracer provider type = %T, want *sdktrace.TracerProvider", otel.GetTracerProvider())
+	// The global is the package's delegating provider; the SDK provider sits behind it.
+	if !otelsetup.IsGlobalProvider(otel.GetTracerProvider()) {
+		t.Fatalf("global tracer provider = %T, want the otel package's delegating provider", otel.GetTracerProvider())
+	}
+	if otelsetup.SDKProvider() == nil {
+		t.Fatal("no SDK tracer provider installed behind the global")
 	}
 }

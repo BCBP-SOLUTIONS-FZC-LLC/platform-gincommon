@@ -1,8 +1,10 @@
 # Architecture
 
-This document describes the internal structure, dependency rules, and runtime data flows of `platform-gincommon`.
+This document describes the internal structure, dependency rules, and runtime flows of `platform-gincommon`.
 
-`platform-gincommon` is a **private Go module** (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon`). It is never deployed as a standalone server — consuming services import it with `go get` (requires `GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*`). The `cmd/server` binary and Docker image are a reference/demo only.
+`platform-gincommon` is a **private Go module** (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon`, `go 1.26.0` directive, `toolchain go1.26.6`) imported by every IAM Go service. It owns the platform's **transport layer**: the HTTP middleware and gRPC interceptor chains that recover panics, correlate requests, trace, log, emit metrics, validate gateway identity, build tenant context and authorize calls. It is also the Go home of the **Enterprise Platform Observability Standard**: the central registry (`internal/obsregistry/registry.json`), the `platform_*` collectors built from it, and `metricslint`. It is **never deployed**. Consumers import `pkg/`; `cmd/server` is a reference binary whose image exists only for CI smoke tests. Release `v1.4.0` ships breaking changes as a MINOR, a [recorded exception](VERSIONING.md#recorded-exceptions): nothing had been deployed and every consumer upgrades in lockstep.
+
+**Does not own:** authentication (JWT/OAuth/API keys are validated by the API gateway; this library trusts gateway-injected headers at the network layer); business authorization policy (each service implements `Authorizer`, and `NewDemoRBAC` is reference-only); database access, pooling and RLS (platform-pgcommon); outbox, SNS/SQS and schema registry (platform-events, platform-schemagov); messaging and DB metric *emission* (platform-events / platform-pgcommon emit their own series, which this registry governs); rate limiting, retries and circuit breaking (gateway / mesh); the production collector, Tempo, Prometheus, Loki and Grafana (the `docker-compose.yml` stack is local-only); ratifying `proposed` metrics (observability governance; this repo records their decisions).
 
 ---
 
@@ -14,204 +16,210 @@ The library is organised in concentric Clean Architecture layers. Inner layers h
 
 ```mermaid
 graph TD
-    subgraph pub["Public API  —  pkg/"]
-        gincommon_pkg["pkg/gincommon\nConfig · TracingOptions\nDefaultMiddlewares · ObservabilityMiddlewares\nProtectedMiddlewares · TimeoutMiddleware · HealthHandler\nRequirePermission · RequirePermissionWithLogger\nInitTracing · EnsureTracing · InitTracingFromEnv · Shutdown\nNewDemoRBAC"]
-        grpccommon_pkg["pkg/grpccommon\nConfig · TracingOptions\nObservability/Protected/Full Unary+Stream Interceptors\nDefaultUnaryInterceptors · DefaultStreamInterceptors\nRequirePermission · RequireStreamPermission · Shutdown\nNewDemoRBAC"]
-        logger_pkg["pkg/logger\nNewLogger"]
+    subgraph cmd["Composition roots  —  cmd/  (reference + tooling, not consumed)"]
+        server_main["server/main.go<br/>demo binary: loads .env, NewLogger(APP_ENV)<br/>internal/server.NewRouter → /health · /metrics · /panic (dev)<br/>http.Server ReadHeaderTimeout 5s · ReadTimeout 30s · IdleTimeout 120s<br/>shutdownTracing() before every os.Exit"]
+        lint_main["metricslint/main.go<br/>check · refs · registry · inventory<br/>exit 0 clean · 1 findings · 2 usage/I-O"]
     end
 
-    subgraph adapters_in["Inbound Adapters  —  internal/adapter/inbound/"]
-        http_mw["http/middleware\nPanicRecoveryMiddleware · RequestIDMiddleware\nTracingMiddleware · CorrelationHeadersMiddleware\nMetricsMiddleware · LoggingMiddleware\nRequireAuth · ContextMiddleware · AuthZMiddleware"]
-        grpc_mw["grpc/middleware\nUnaryMetricsInterceptor · StreamMetricsInterceptor\nUnaryPanicRecoveryInterceptor · StreamPanicRecoveryInterceptor\nUnaryRequestIDInterceptor · StreamRequestIDInterceptor\nUnaryTracingInterceptor · StreamTracingInterceptor\nUnaryLoggingInterceptor · StreamLoggingInterceptor\nUnaryRequireAuthInterceptor · StreamRequireAuthInterceptor\nUnaryContextInterceptor · StreamContextInterceptor\nUnaryAuthZInterceptor · StreamAuthZInterceptor"]
-        label_pkg["label\nHTTPRoute label resolver"]
+    subgraph pkg["Public API  —  pkg/  (the only packages consumers import)"]
+        gin_pkg["gincommon<br/>Config · TracingOptions · TracingConfig<br/>Observability/Protected/DefaultMiddlewares · TimeoutMiddleware · HealthHandler<br/>RequirePermission(WithLogger) · PropagateHeaders · PropagateIdentityHeaders<br/>InitTracingWithConfig · InitTracing · EnsureTracing · InitTracingFromEnv · Shutdown<br/>NewTracer · NewSpanTracer · SpanTraceID · RecordSpanError · InjectTraceContext<br/>MetricsHandler · NewShared*Vec · New*Vec · LabeledRegisterer<br/>aliases: Authorizer · RequestContextData · Logger · DemoRBAC · ErrForbidden"]
+        grpc_pkg["grpccommon<br/>Config · Observability/Protected/Full/Default Unary+Stream Interceptors<br/>Timeout{Unary,Stream}Interceptor · RequirePermission · RequireStreamPermission<br/>{Unary,Stream}ClientInterceptor · {Unary,Stream}ClientIdentityInterceptor<br/>RegisterKnownMethods · RegisterHealth · RequestContextFromContext · Shutdown<br/>aliases: Authorizer · RequestContextData · Logger · DemoRBAC · ErrForbidden"]
+        obs_pkg["obsregistry<br/>Default · Parse · Validate · ValidateText · ServicePrefix<br/>Severity · Rule* re-exports"]
+        log_pkg["logger<br/>NewLogger(env) · Default()"]
     end
 
-    subgraph adapters_out["Outbound Adapters  —  internal/adapter/outbound/"]
-        logger_adp["logger\nNewLogger · NewZapLogger → port.Logger"]
-        metrics_adp["metrics\nHTTP + gRPC Prometheus collectors\nInit · InitWithRegisterer"]
-        otel_adp["otel\nInitTelemetry · EnsureInitTelemetry\nShutdown · TelemetryConfig"]
+    subgraph inbound["Inbound adapters  —  internal/adapter/inbound/"]
+        http_mw["http/middleware<br/>PanicRecovery · RequestID · Tracing · CorrelationHeaders<br/>Metrics (+429 log limiter) · Logging · Timeout<br/>RequireAuth · ContextMiddleware · AuthZMiddleware<br/>identity.go: ambiguous-header check · roles join"]
+        grpc_mw["grpc/middleware<br/>Unary+Stream: PanicRecovery · RequestID · Tracing · Metrics · Logging<br/>RequireAuth · Context · AuthZ · Timeout (stream: handler goroutine)<br/>client propagation + identity interceptors<br/>status.go: grpcStatus/grpcCode · CANCELLED-style names"]
+        label["label<br/>HTTPRoute → Gin template or unknown<br/>GRPCMethod → pattern + 256-byte cap + allow-list"]
     end
 
-    subgraph core["Core  —  internal/core/"]
-        service_pkg["service\nContextService · RBACService · LogSanitizer"]
-        port_pkg["port\nLogger · Authorizer · ContextService"]
-        domain_pkg["domain\nRequestContext{TenantID,UserID,Roles,TraceID,ClientIP}\ntransport constants · ErrForbidden · ErrInternal\nNormalizeHeaderValue\nContextWithRequestContext · RequestContextFromGoContext"]
+    subgraph outbound["Outbound adapters  —  internal/adapter/outbound/"]
+        metrics_adp["metrics<br/>platform_* collectors built from the registry<br/>InitWithOptions (mutex, transactional, retryable)<br/>atomic collector set · ErrIdentityMismatch · SanitizeVersion<br/>RecordHTTP / RecordGRPC / ... (nil-safe) · RateLimitedErrorLog"]
+        otel_adp["otel<br/>delegating global TracerProvider (inner SDK provider swapped atomically)<br/>InitTelemetry · EnsureInitTelemetry · Shutdown · Sampler (ParentBased)<br/>Resource: service.name/version/namespace · deployment.environment.name<br/>SetErrorHandler → Config.Logger (otel_error)"]
+        log_adp["logger<br/>Zap: console in dev/local, JSON otherwise<br/>LOG_LEVEL · LOG_SAMPLING (off) · LOG_FILE tee"]
     end
 
-    subgraph infra["Infrastructure"]
-        config_pkg["internal/config\nenv var loading\nBuildVersion · OtelExporterEndpoint\nOtelExporterInsecure · OtelTraceSampleRatio"]
+    subgraph registry["Governance  —  internal/obsregistry/"]
+        reg["registry.json (embedded, 110 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
     end
 
-    subgraph tests["Tests  —  test/"]
-        test_unit["unit/\nno live server · MockLogger"]
-        test_int["integration/\nin-process httptest server"]
-        test_e2e["e2e/\nfull server startup"]
-        fixtures_pkg["fixtures/\nMockLogger · HTTP helpers"]
+    subgraph core["Core  —  internal/core/  (no framework imports)"]
+        service["service<br/>ContextService (BuildContext)<br/>RBACService (demo Authorizer, default-deny)<br/>LogSanitizer (Sanitize, SanitizeString)"]
+        port["port<br/>Logger · Authorizer · ContextBuilder"]
+        domain["domain<br/>RequestContext{TenantID,UserID,Roles,TraceID,ClientIP}<br/>header + metadata constants · ParseRoles / ParseRolesStrict<br/>NormalizeRequestID · ErrForbidden · ErrInvalidRoles"]
     end
 
-    gincommon_pkg  --> http_mw
-    gincommon_pkg  --> metrics_adp
-    gincommon_pkg  --> otel_adp
-    gincommon_pkg  --> config_pkg
-    gincommon_pkg  --> service_pkg
-    gincommon_pkg  --> port_pkg
-    grpccommon_pkg --> grpc_mw
-    grpccommon_pkg --> metrics_adp
-    logger_pkg     --> logger_adp
-    http_mw        --> domain_pkg
-    http_mw        --> port_pkg
-    http_mw        --> service_pkg
-    http_mw        --> label_pkg
-    grpc_mw        --> metrics_adp
-    service_pkg    --> port_pkg
-    service_pkg    --> domain_pkg
-    logger_adp     --> port_pkg
-    test_unit      -.->|"imports"| gincommon_pkg
-    test_unit      -.->|"imports"| grpccommon_pkg
-    test_int       -.->|"imports"| gincommon_pkg
-    test_e2e       -.->|"imports"| gincommon_pkg
-    test_int       -.-> fixtures_pkg
-    test_e2e       -.-> fixtures_pkg
+    subgraph infra["Configuration  —  internal/config/"]
+        config["env loading + normalisation<br/>AppEnv (trim+lower) · IsDevEnv (dev, local)<br/>OTEL_* · BUILD_VERSION · OBSERVABILITY_DOMAIN"]
+    end
+
+    subgraph demo["Demo router  —  internal/server/"]
+        router["NewRouter: ObservabilityMiddlewares + RequestTimeout 30s<br/>SetTrustedProxies(nil)"]
+    end
+
+    server_main --> router
+    server_main --> config
+    lint_main   --> reg
+    router      --> gin_pkg
+    router      --> log_adp
+    gin_pkg     --> http_mw
+    gin_pkg     --> metrics_adp
+    gin_pkg     --> otel_adp
+    gin_pkg     --> service
+    gin_pkg     --> reg
+    gin_pkg     --> log_pkg
+    grpc_pkg    --> grpc_mw
+    grpc_pkg    --> label
+    grpc_pkg    --> metrics_adp
+    grpc_pkg    --> otel_adp
+    grpc_pkg    --> service
+    obs_pkg     --> reg
+    log_pkg     --> log_adp
+    http_mw     --> label
+    http_mw     --> metrics_adp
+    http_mw     --> service
+    http_mw     --> port
+    http_mw     --> domain
+    grpc_mw     --> label
+    grpc_mw     --> metrics_adp
+    grpc_mw     --> service
+    grpc_mw     --> port
+    grpc_mw     --> domain
+    metrics_adp --> reg
+    metrics_adp --> config
+    otel_adp    --> config
+    otel_adp    --> port
+    service     --> domain
+    port        --> domain
 ```
 
-**Rule:** `domain` ← `port` ← `service` ← `adapter` ← `pkg`. The `domain` and `port` packages import nothing from this module's `adapter/` or framework packages. Packages in `pkg/` depend on `core/` but never directly on each other across packages. Tests (dashed arrows) consume the public API but are not part of the dependency chain.
+**Rule:** `domain` ← `port` ← `service` ← `adapter` ← `pkg`. The `core/` packages import nothing from `adapter/`, `pkg/`, Gin, gRPC, Prometheus or OpenTelemetry. `core/service` imports only `core/domain`, and `RBACService` satisfies `port.Authorizer` structurally. Interfaces in `core/port` are implemented in adapters and injected inward. `internal/obsregistry` and `internal/config` are standalone leaves with no internal imports, used by the outbound adapters and `pkg/`. `pkg/gincommon` and `pkg/grpccommon` are composition layers; neither imports the other. They share process state only through `adapter/outbound/metrics` and `adapter/outbound/otel`, which is why there is **one metrics identity and one tracer provider per process**. `pkg/gincommon` imports `pkg/logger` (for `MetricsHandler`'s rate-limited error log).
+
+**Type exposure rule.** Every internal type that appears in a `pkg/` signature has a `pkg/` alias (`types.go`): `Authorizer`, `RequestContextData`, `Logger`, `DemoRBAC`, `ErrForbidden`. A consumer must never need an `internal/` import, which Go would reject. `test/unit/gincommon/consumer_api_test.go` pins this rule for both stacks. The alias is `RequestContextData` in both packages because `gincommon.RequestContext` was already the accessor function.
 
 ---
 
 ## Package dependency graph
 
-Arrows represent Go `import` relationships (module-internal only).
+Arrows are Go `import` relationships (module-internal only), generated from `go list`. Test packages are excluded.
 
 > Source: [`docs/architecture/mermaid/package-dependencies.mmd`](docs/architecture/mermaid/package-dependencies.mmd)
 
 ```mermaid
 graph LR
+    server(["cmd/server"])
+    metricslint(["cmd/metricslint"])
+    demo(["internal/server"])
+
     gincommon(["pkg/gincommon"])
     grpccommon(["pkg/grpccommon"])
-    logger_pub(["pkg/logger"])
+    obsregistry_pkg(["pkg/obsregistry"])
+    logger_pkg(["pkg/logger"])
+
     http_mw(["adapter/inbound/http/middleware"])
     grpc_mw(["adapter/inbound/grpc/middleware"])
     label(["adapter/inbound/label"])
-    logger_adp(["adapter/outbound/logger"])
+
     metrics(["adapter/outbound/metrics"])
     otel(["adapter/outbound/otel"])
+    logger_adp(["adapter/outbound/logger"])
+
+    obsregistry(["internal/obsregistry"])
     config(["internal/config"])
+
     service(["core/service"])
     port(["core/port"])
     domain(["core/domain"])
 
-    gincommon    --> http_mw
-    gincommon    --> metrics
-    gincommon    --> otel
-    gincommon    --> config
-    gincommon    --> service
-    gincommon    --> port
-    grpccommon   --> grpc_mw
-    grpccommon   --> metrics
-    logger_pub   --> logger_adp
-    http_mw      --> domain
-    http_mw      --> port
-    http_mw      --> service
-    http_mw      --> label
-    grpc_mw      --> metrics
-    service      --> port
-    service      --> domain
-    logger_adp   --> port
+    server      --> demo
+    server      --> config
+    metricslint --> obsregistry
+    demo        --> gincommon
+    demo        --> logger_adp
+    demo        --> config
+    demo        --> port
+
+    gincommon   --> http_mw
+    gincommon   --> metrics
+    gincommon   --> otel
+    gincommon   --> obsregistry
+    gincommon   --> logger_pkg
+    gincommon   --> config
+    gincommon   --> service
+    gincommon   --> port
+    gincommon   --> domain
+
+    grpccommon  --> grpc_mw
+    grpccommon  --> label
+    grpccommon  --> metrics
+    grpccommon  --> otel
+    grpccommon  --> config
+    grpccommon  --> service
+    grpccommon  --> port
+    grpccommon  --> domain
+
+    obsregistry_pkg --> obsregistry
+    logger_pkg  --> logger_adp
+    logger_pkg  --> port
+
+    http_mw     --> label
+    http_mw     --> metrics
+    http_mw     --> service
+    http_mw     --> port
+    http_mw     --> domain
+    grpc_mw     --> label
+    grpc_mw     --> metrics
+    grpc_mw     --> service
+    grpc_mw     --> port
+    grpc_mw     --> domain
+
+    metrics     --> obsregistry
+    metrics     --> config
+    otel        --> config
+    otel        --> port
+
+    service     --> domain
+    port        --> domain
 ```
 
-`core/domain` is the dependency sink — it imports nothing from this module. `core/port` imports only `core/domain`.
-
----
-
-## Public API packages
-
-### pkg/gincommon
-
-| Symbol | Description |
-|--------|-------------|
-| `Config` | Middleware stack config: `Logger`, `ServiceName` (required — panics if empty), `BuildVersion`, `Tracing` |
-| `TracingOptions` | Optional OTel overrides: `Endpoint`, `Insecure`, `SampleRatio`, `EnableBaggage` |
-| `ObservabilityMiddlewares(cfg)` | Returns `[PanicRecovery, RequestID, Tracing, CorrelationHeaders, Metrics, Logging]` — no auth |
-| `ProtectedMiddlewares(cfg)` | Returns `[RequireAuth, ContextMiddleware]` — validates identity headers |
-| `DefaultMiddlewares(cfg)` | Full stack: `ObservabilityMiddlewares` + `ProtectedMiddlewares` |
-| `TimeoutMiddleware(duration)` | Sets a per-request context deadline; insert before other middleware groups. Zero/negative duration is a no-op |
-| `HealthHandler()` | Returns 200 `{"status":"ok"}` — register before `ProtectedMiddlewares` (no auth required) |
-| `ErrorResponse` | Standard 4xx/5xx body struct: `Error`, `Status`, `TraceID`, `RequestID` — unmarshal from error responses |
-| `PropagateHeaders(c, req)` | Injects trace context, request ID, and identity headers from inbound Gin context into an outbound `*http.Request` |
-| `RequirePermission(action, resource, auth)` | Per-route RBAC middleware, no logging on denial |
-| `RequirePermissionWithLogger(action, resource, auth, logger)` | Per-route RBAC with audit log on denial and internal errors |
-| `NewDemoRBAC()` | Returns reference `*RBACService` (demos and tests only — not for production IAM). `NewRBAC()` is a deprecated alias |
-| `RequestContext(c)` | Retrieves `*domain.RequestContext` from the Gin context; typed-nil safe |
-| `TraceIDFromContext(c)` / `RequestIDFromContext(c)` | Type-safe correlation-ID readers for Gin handler context |
-| `InitTracing(service, version, endpoint)` | Initialise OTLP/gRPC export; returns shutdown func |
-| `EnsureTracing(service, version, endpoint)` | Install TracerProvider only if no SDK provider is registered yet |
-| `EnsureInitTelemetry(service, version, cfg)` | Like `EnsureTracing` with full `TelemetryConfig` |
-| `InitTracingFromEnv()` | Read `OTEL_SERVICE_NAME`, `BUILD_VERSION`, `OTEL_EXPORTER_OTLP_ENDPOINT` then call `InitTracing` |
-| `Shutdown(logger)` | Graceful cleanup: flush OTel spans + `logger.Sync()`; call from `main()` after the HTTP server stops |
-
-### pkg/grpccommon
-
-| Symbol | Description |
-|--------|-------------|
-| `Config` | `ServiceName` (required — panics if empty), `BuildVersion`, `Logger`, `Tracing *TracingOptions` for Prometheus labels, tracing scopes, and interceptor logging |
-| `TracingOptions` | Optional OTel overrides: `Endpoint`, `Insecure`, `SampleRatio`, `EnableBaggage` (mirrors `gincommon.TracingOptions`) |
-| `ObservabilityUnaryInterceptors(cfg)` | Returns `[PanicRecovery, RequestID, Tracing, Metrics, Logging]` for unary RPCs |
-| `ObservabilityStreamInterceptors(cfg)` | Returns `[PanicRecovery, RequestID, Tracing, Metrics, Logging]` for streaming RPCs |
-| `ProtectedUnaryInterceptors(cfg)` | Returns `[RequireAuth, ContextInterceptor]` — validates identity metadata |
-| `ProtectedStreamInterceptors(cfg)` | Returns `[RequireAuth, ContextInterceptor]` for streaming RPCs |
-| `FullUnaryInterceptors(cfg)` | Full stack: `ObservabilityUnaryInterceptors` + `ProtectedUnaryInterceptors` |
-| `FullStreamInterceptors(cfg)` | Full stack: `ObservabilityStreamInterceptors` + `ProtectedStreamInterceptors` |
-| `DefaultUnaryInterceptors(cfg)` | Alias for `ObservabilityUnaryInterceptors` (backward compatible) |
-| `DefaultStreamInterceptors(cfg)` | Alias for `ObservabilityStreamInterceptors` (backward compatible) |
-| `RequirePermission(action, resource, auth)` | Per-RPC RBAC unary interceptor; requires `ProtectedUnaryInterceptors` to have run |
-| `RequirePermissionWithLogger(action, resource, auth, logger)` | Like `RequirePermission` with audit logging on denial |
-| `RequireStreamPermission(action, resource, auth)` | Per-stream RBAC interceptor; requires `ProtectedStreamInterceptors` to have run |
-| `RequireStreamPermissionWithLogger(action, resource, auth, logger)` | Like `RequireStreamPermission` with audit logging on denial |
-| `NewDemoRBAC()` | Returns reference `*RBACService` (demos and tests only — not for production IAM) |
-| `RequestContextFromContext(ctx)` | Retrieves `*domain.RequestContext` from a gRPC handler context |
-| `RequestIDFromContext(ctx)` | Retrieves the correlation request ID from a gRPC handler context |
-| `Shutdown(logger)` | Graceful cleanup: flush OTel spans + `logger.Sync()`; call from `main()` after `GracefulStop` returns |
-
-### pkg/logger
-
-| Symbol | Description |
-|--------|-------------|
-| `NewLogger(env)` | Returns `port.Logger` backed by Zap; dev config when `env == "dev"`, production otherwise |
+`core/domain` is the dependency sink. Both inbound adapters depend on the same five packages (`label`, `metrics`, `service`, `port`, `domain`), so HTTP and gRPC share label bounding, classification (`HTTPStatusClass` / `GRPCStatusClass`), role parsing and sanitisation by construction. `cmd/metricslint` and `pkg/obsregistry` depend only on `internal/obsregistry`, so the CLI can be cross-compiled and shipped without the middleware.
 
 ---
 
 ## Middleware stack composition
 
-`ObservabilityMiddlewares`, `ProtectedMiddlewares`, and `DefaultMiddlewares` are pure factory functions — each call returns a new slice; no global state is mutated except for the idempotent `metrics.Init` and `EnsureInitTelemetry` calls.
-
-`TimeoutMiddleware(duration)` can optionally be inserted before `ObservabilityMiddlewares` or `ProtectedMiddlewares` to set a per-request context deadline. Zero or negative duration is a no-op — insert it unconditionally and control the timeout via configuration.
+`ObservabilityMiddlewares`, `ProtectedMiddlewares`, `DefaultMiddlewares` and the gRPC `Observability*`/`Protected*`/`Full*` constructors are factories: each call returns a new slice. The only process-wide effects are metrics initialisation (one identity per process) and tracing installation (one provider per process). Both are safe to repeat with the same configuration.
 
 > Source: [`docs/architecture/mermaid/middleware-stack-composition.mmd`](docs/architecture/mermaid/middleware-stack-composition.mmd)
 
 ```mermaid
 flowchart TD
-    A([Middleware stack constructor called]) --> B{Which constructor?}
+    A(["Stack constructor called"]) --> B{"Which constructor?"}
 
-    B -- ObservabilityMiddlewares --> C[panic: if ServiceName empty]
-    C --> D[metrics.Init — idempotent]
-    D --> E[resolve BuildVersion from env if empty]
-    E --> F[resolveTelemetry — merge cfg.Tracing over env defaults]
-    F --> G[EnsureInitTelemetry — installs SDK if no provider yet]
-    G --> H["return [\n  PanicRecoveryMiddleware\n  RequestIDMiddleware\n  TracingMiddleware\n  CorrelationHeadersMiddleware\n  MetricsMiddleware\n  LoggingMiddleware\n]"]
+    B -- "ObservabilityMiddlewares(cfg)" --> C{"cfg.ServiceName empty?"}
+    C -- yes --> CP(["panic: ServiceName is required"])
+    C -- no --> D["metrics.MustInitFromConfig<br/>ApplyEnvDefaults → resolve → InitWithOptions<br/>same identity: no-op · unknown version inherits/upgrades<br/>different identity: panic ErrIdentityMismatch"]
+    D --> E["resolve telemetry: cfg.Tracing over OTEL_* env<br/>+ Domain / Environment for the trace resource"]
+    E --> F["ensureInitTelemetry<br/>install when no provider or only a provisional one<br/>else keep it (upgrade its error logger)"]
+    F --> G["return [<br/>PanicRecovery(logger)<br/>RequestID<br/>Tracing(ServiceName)<br/>CorrelationHeaders<br/>Metrics(logger)<br/>Logging(logger)<br/>+ Timeout(RequestTimeout) when > 0  — innermost<br/>]"]
 
-    B -- ProtectedMiddlewares --> I[NewContextService]
-    I --> J["return [\n  RequireAuth\n  ContextMiddleware\n]"]
+    B -- "ProtectedMiddlewares(cfg)" --> H["service.NewContextService()"]
+    H --> I["return [<br/>RequireAuth(logger)<br/>ContextMiddleware(ctxSvc, logger)<br/>]"]
 
-    B -- DefaultMiddlewares --> K[calls ObservabilityMiddlewares]
-    K --> L[calls ProtectedMiddlewares]
-    L --> M["return [\n  PanicRecoveryMiddleware\n  RequestIDMiddleware\n  TracingMiddleware\n  CorrelationHeadersMiddleware\n  MetricsMiddleware\n  LoggingMiddleware\n  RequireAuth\n  ContextMiddleware\n]"]
+    B -- "DefaultMiddlewares(cfg)" --> J["ObservabilityMiddlewares(cfg)<br/>+ ProtectedMiddlewares(cfg)"]
+
+    B -- "FullUnary/StreamInterceptors(cfg)" --> K["Observability*(cfg) + Protected*(cfg)<br/>recovery → request ID → tracing → metrics → logging<br/>→ auth → context"]
+    K --> L(["append Timeout*Interceptor(d) last — innermost<br/>RequirePermission* after Protected*"])
 ```
+
+Constructors validate at startup, not at request time: an empty `ServiceName`, a missing or unregistered domain, an environment outside `local|dev|test|staging|prod`, or a conflicting identity panics while the service is still booting, so a misconfigured pod never serves traffic with corrupt labels.
 
 ---
 
-## Request flow through the full middleware stack
+## Request flow
 
-When using `DefaultMiddlewares`, every HTTP request passes through all eight handlers in order. Each deferred action runs in reverse as the call stack unwinds.
+Every HTTP request passes through the full chain. Pre-handler work runs top-down; deferred work (metrics, the access log, span end) runs bottom-up after the handler returns, so every signal sees the final status.
 
 > Source: [`docs/architecture/mermaid/request-flow.mmd`](docs/architecture/mermaid/request-flow.mmd)
 
@@ -225,585 +233,932 @@ sequenceDiagram
     participant CH as CorrelationHeaders
     participant ME as Metrics
     participant LO as Logging
+    participant TO as Timeout (when RequestTimeout set)
     participant AU as RequireAuth
     participant CM as ContextMiddleware
     participant H as Handler
 
+    Note over Client,GW: Gateway authenticates the caller, strips client identity headers<br/>and REPLACES x-user-id / x-tenant-id / x-tenant-roles
+
     Client ->>+ GW: HTTP request
-    GW ->>+ PR: x-user-id, x-tenant-id injected
-    Note over PR: defer recover()<br/>returns 500 on panic
+    GW ->>+ PR: request + gateway identity headers
+    Note over PR: defer recover() — outermost
 
     PR ->>+ RI: c.Next()
-    Note over RI: read/generate x-request-id<br/>echo X-Request-ID in response
+    Note over RI: reuse x-request-id if valid ([A-Za-z0-9._-], max 128)<br/>else generate UUID · set X-Request-ID header
 
     RI ->>+ TR: c.Next()
-    Note over TR: extract traceparent<br/>start OTel HTTP span<br/>echo X-Trace-ID in response
+    Note over TR: extract W3C traceparent (ParentBased sampler)<br/>start server span · bounded method (_OTHER) · route template
 
     TR ->>+ CH: c.Next()
-    Note over CH: propagate trace/correlation<br/>headers to downstream calls
+    Note over CH: set X-Trace-ID + X-Request-ID BEFORE c.Next()<br/>(headers set after the body is written never reach the client)
 
     CH ->>+ ME: c.Next()
-    Note over ME: record http_active_requests +1<br/>defer: observe duration, size, status
+    Note over ME: platform_http_active_requests +1<br/>defer: requests_total · duration · sizes (unknown length skipped)
 
     ME ->>+ LO: c.Next()
-    Note over LO: defer: write http_request log<br/>after response (sanitizes headers)
+    Note over LO: defer: http_request log after the response
 
-    LO ->>+ AU: c.Next()
-    alt x-user-id or x-tenant-id missing/invalid
-        AU -->> Client: 401 Unauthorized
-    else headers valid
+    LO ->>+ TO: c.Next()
+    Note over TO: context.WithTimeout(RequestTimeout)
+
+    TO ->>+ AU: c.Next()
+    alt missing, blank, oversized or REPEATED x-user-id / x-tenant-id
+        Note over AU: warn "auth: request rejected"<br/>claimed ids sanitized, 256-byte cap
+        AU -->> TO: 401 {error, status, trace_id, request_id}
+    else identity valid
         AU ->>+ CM: c.Next()
-        Note over CM: build RequestContext<br/>{UserID, TenantID, Roles, TraceID, ClientIP}<br/>store in Gin context
-
-        CM ->>+ H: c.Next()
-        H -->>- CM: response written
+        alt x-tenant-roles over 4096 bytes or 64 roles
+            CM -->> AU: 401 invalid tenant roles (identity logged as claimed_*)
+        else ok
+            Note over CM: RequestContext{UserID, TenantID, Roles, TraceID, ClientIP}
+            CM ->>+ H: c.Next()
+            H -->>- CM: response written (honours c.Request.Context())
+        end
         CM -->>- AU: return
-        AU -->>- LO: return
     end
+    AU -->>- TO: return
+    alt deadline exceeded and nothing written / status still 200
+        Note over TO: platform_http_request_timeouts_total +1
+        TO -->> LO: 503 request timeout
+    end
+    TO -->>- LO: return
 
     LO -->>- ME: return
-    Note over LO: http_request log written
+    Note over LO: Info 2xx · Warn 4xx · Error 5xx<br/>tenant_id/user_id verified only, else claimed_*
     ME -->>- CH: return
-    Note over ME: metrics observed
+    Note over ME: status recorded = status sent
     CH -->>- TR: return
     TR -->>- RI: return
+    Note over TR: span status + http.response.status_code, span ended
     RI -->>- PR: return
     PR -->>- GW: return
-    GW -->>- Client: HTTP response
+    GW -->>- Client: response + X-Trace-ID + X-Request-ID
 ```
+
+**Middleware execution model.** With `DefaultMiddlewares` and `Config.RequestTimeout` set:
+
+```
+PanicRecovery.defer ──────────────────────────────────────────── recover · 500 JSON or abort
+  RequestID                                                       x-request-id → X-Request-ID
+    Tracing.defer ────────────────────────────────────────────── span status · end
+      CorrelationHeaders                                          X-Trace-ID / X-Request-ID set BEFORE c.Next()
+        Metrics.defer ────────────────────────────────────────── counter · duration · sizes · active gauge
+          Logging.defer ──────────────────────────────────────── http_request log
+            Timeout (innermost observability handler)             deadline → 503 only on DeadlineExceeded
+              [/api group] RequireAuth                            401 + audit log
+                ContextMiddleware                                 RequestContext · roles caps
+                  [per route] RequirePermission                   403 / 500
+                    Handler ← executes here
+```
+
+Register `/health` and `/metrics` before the protected group: probes and scrapers send no identity headers. `RequirePermission` placed before `ProtectedMiddlewares` returns `500`, because there is no `RequestContext` to authorize against. That is a diagnosable misconfiguration, never a silent pass.
 
 ---
 
-## Panic recovery flow
+## gRPC interceptor flow
 
-`PanicRecoveryMiddleware` sits first in the stack so it wraps all downstream middleware and handlers.
-
-> Source: [`docs/architecture/mermaid/panic-recovery-flow.mmd`](docs/architecture/mermaid/panic-recovery-flow.mmd)
-
-```mermaid
-sequenceDiagram
-    participant Gin as Gin Engine
-    participant PR as PanicRecoveryMiddleware
-    participant Next as Downstream Middleware / Handler
-    participant Span as OTel Span
-    participant Client
-
-    Gin ->>+ PR: ServeHTTP
-    Note over PR: record start time<br/>defer recover()
-
-    PR ->>+ Next: c.Next()
-
-    alt Handler panics
-        Next --x PR: panic(value)
-        Note over PR: recover() catches panic<br/>resolve route label<br/>debug.Stack()
-
-        alt logger != nil
-            PR ->> PR: service.Sanitize fields<br/>{error_category, panic, stack,<br/> method, route, status=500,<br/> trace_id, request_id, duration}
-            PR ->> PR: logger.Error "panic recovered"
-        else logger nil
-            PR ->> PR: log.Printf to stderr
-        end
-
-        PR ->> Span: span.RecordError(err)
-        PR ->> Span: span.SetStatus(Error, "panic")
-        PR ->> Span: span.SetAttributes(http.status_code=500)
-
-        alt response not yet started (!c.IsAborted())
-            PR ->> Client: 500 Internal Server Error JSON
-        end
-
-    else No panic
-        Next -->>- PR: return normally
-    end
-
-    PR -->>- Gin: return
-```
-
----
-
-## RBAC middleware flow
-
-`AuthZMiddleware` is a per-route handler installed after `ContextMiddleware`. It requires `ContextMiddleware` to have already stored a `*domain.RequestContext` in the Gin context.
-
-> Source: [`docs/architecture/mermaid/rbac-middleware-flow.mmd`](docs/architecture/mermaid/rbac-middleware-flow.mmd)
-
-```mermaid
-sequenceDiagram
-    participant H as Handler (Gin)
-    participant AZ as AuthZMiddleware
-    participant SVC as port.Authorizer
-
-    H ->>+ AZ: c.Next() reaches AuthZMiddleware
-
-    alt RequestContext missing from Gin context
-        AZ -->> H: 500 Internal Server Error<br/>"request context missing"
-    else RequestContext wrong type
-        AZ -->> H: 500 Internal Server Error<br/>"invalid request context"
-    else RequestContext valid
-        AZ ->>+ SVC: Authorize(userID, roles, action, resource)
-
-        alt auth.Authorize returns ErrForbidden
-            SVC -->> AZ: ErrForbidden
-            Note over AZ: logger.Warn "authz: access denied"<br/>{user_id, roles, action, resource}
-            AZ -->> H: 403 Forbidden
-        else auth.Authorize returns other error
-            SVC -->> AZ: error
-            Note over AZ: logger.Error "authz: internal authorization error"
-            AZ -->> H: 500 Internal Server Error
-        else auth.Authorize returns nil
-            SVC -->>- AZ: nil
-            AZ ->>+ H: c.Next() — handler runs
-            H -->>- AZ: return
-        end
-    end
-    AZ -->>- H: return
-```
-
----
-
-## Tracing initialisation
-
-`ObservabilityMiddlewares` calls `EnsureInitTelemetry` automatically, so most consuming services do not need to call tracing helpers directly. They are provided for services that initialise tracing before their HTTP server starts (e.g. to instrument background jobs).
-
-> Source: [`docs/architecture/mermaid/tracing-initialization.mmd`](docs/architecture/mermaid/tracing-initialization.mmd)
-
-```mermaid
-flowchart TD
-    A([Tracing initializer called]) --> B{Which function?}
-
-    B -- InitTracingFromEnv --> C[read OTEL_SERVICE_NAME<br/>BUILD_VERSION<br/>OTEL_EXPORTER_OTLP_ENDPOINT]
-    C --> D[call InitTracing]
-
-    B -- InitTracing --> E[build TelemetryConfig<br/>from env defaults]
-    E --> F[call InitTelemetry]
-
-    B -- EnsureTracing --> G{Is global provider<br/>an SDK TracerProvider?}
-    G -- yes, already initialised --> Z([no-op — return])
-    G -- no --> F
-
-    B -- EnsureInitTelemetry\nvia ObservabilityMiddlewares --> G
-
-    F --> H[shutdownMu.Lock<br/>call previous shutdown if set]
-    H --> I[initTracing:<br/>build OTel Resource<br/>service.name + service.version]
-    I --> J{Endpoint non-empty?}
-    J -- yes --> K[dial OTLP/gRPC exporter<br/>with optional InsecureOption]
-    K -- success --> L[TracerProvider<br/>with Batcher + Resource + Sampler]
-    K -- failure --> M[TracerProvider<br/>in-process only<br/>no OTLP export]
-    J -- no --> M
-    L --> N[SetTracerProvider global]
-    M --> N
-    N --> O{EnableBaggage?}
-    O -- yes --> P[propagators: TraceContext + Baggage]
-    O -- no  --> Q[propagator: TraceContext only]
-    P --> R[SetTextMapPropagator composite]
-    Q --> R
-    R --> S([return shutdown func<br/>5-second flush on tp.Shutdown])
-```
-
-> `OtelExporterInsecure` defaults to **false** (TLS) unless `APP_ENV` is `"dev"`, `"development"`, or `"local"`. An unset `APP_ENV` is treated as secure. Override with `OTEL_EXPORTER_OTLP_INSECURE=true`.
-
----
-
-## Metrics initialisation
-
-> Source: [`docs/architecture/mermaid/metrics-initialization.mmd`](docs/architecture/mermaid/metrics-initialization.mmd)
-
-```mermaid
-flowchart TD
-    A([metrics.Init called]) --> B{sync.Once<br/>already fired?}
-    B -- yes --> Z([no-op — return])
-    B -- no  --> C["normalize empty buildVersion -> unknown"]
-    C --> D[initMetricsWithRegisterer<br/>with prometheus.DefaultRegisterer]
-    D --> E[build constLabels<br/>service=serviceName<br/>version=buildVersion]
-    E --> F[create HTTP collectors<br/>HttpRequestsTotal · HttpRequestDuration<br/>HttpRequestSizeBytes · HttpResponseSizeBytes<br/>HttpActiveRequests · HttpPanicTotal<br/>RateLimitedRequestsTotal · HttpRequestTimeoutTotal · BuildInfo]
-    F --> G[initGRPCMetrics<br/>GrpcRequestsTotal · GrpcRequestDuration<br/>GrpcRequestSizeBytes · GrpcResponseSizeBytes<br/>GrpcInflight · GrpcRateLimitedRequestsTotal · GrpcPanicTotal]
-    G --> H[reg.MustRegister all collectors]
-    H --> I[BuildInfo.WithLabelValues.Set 1]
-    I --> J([return — vars are non-nil])
-
-    A2([metrics.InitWithRegisterer called]) --> C2[normalize empty buildVersion]
-    C2 --> D2[initMetricsWithRegisterer<br/>with provided registerer]
-    D2 --> E
-```
-
-#### Registered Prometheus metrics
-
-| Metric | Type | Labels |
-|--------|------|--------|
-| `http_requests_total` | Counter | method, route, status_class, error_class |
-| `http_request_duration_seconds` | Histogram | method, route, status_class, error_class |
-| `http_request_size_bytes` | Histogram | method, route, status_class, error_class |
-| `http_response_size_bytes` | Histogram | method, route, status_class, error_class |
-| `http_active_requests` | Gauge | route |
-| `http_panic_total` | Counter | method, route |
-| `rate_limited_requests_total` | Counter | method, route |
-| `http_request_timeout_total` | Counter | method, route |
-| `build_info` | Gauge (=1) | *(const: service, version)* |
-| `grpc_server_handled_total` | Counter | method, grpc_code, status_class, error_class |
-| `grpc_server_handling_seconds` | Histogram | method, status_class, error_class |
-| `grpc_server_request_size_bytes` | Histogram | method, status_class, error_class |
-| `grpc_server_response_size_bytes` | Histogram | method, status_class, error_class |
-| `grpc_server_inflight_requests` | Gauge | method |
-| `grpc_rate_limited_requests_total` | Counter | method |
-| `grpc_panic_total` | Counter | method |
-
-All metrics carry const labels `service` and `version` set at initialisation time.
-
-> Note: `status_class` buckets 3xx into `2xx` (see `HTTPStatusClass`). `error_class` is one of `success`, `client_error`, `server_error`. The gRPC counter additionally exposes the raw `grpc_code` (e.g. `OK`, `InvalidArgument`, `Internal`).
-
-`pkg/gincommon.MetricsRegisterer()`/`MetricsConstLabels()` and their `pkg/grpccommon` equivalents expose the registerer and const labels above, so consuming services can register their own application collectors consistently instead of assuming `prometheus.DefaultRegisterer` and duplicating the labels.
-
----
-
-## gRPC interceptor stack
-
-`FullUnaryInterceptors` (and `FullStreamInterceptors`) compose the complete interceptor chain in the following order:
-
-1. `PanicRecovery` — recover panics; return `codes.Internal`; log with stack trace
-2. `RequestID` — read `x-request-id` from metadata or generate a UUID
-3. `Tracing` — extract W3C `traceparent`; start OTel server span; scoped to `cfg.ServiceName`
-4. `Metrics` — Prometheus `grpc_server_handled_total`, duration, sizes, inflight
-5. `Logging` — structured `grpc_request` log: Info (OK), Warn (client errors), Error (server errors)
-6. `RequireAuth` — reject calls missing `x-user-id` or `x-tenant-id` with `codes.Unauthenticated`
-7. `ContextInterceptor` — build `domain.RequestContext`; store via `domain.ContextWithRequestContext`
-8. *(Optional)* `AuthZInterceptor` — per-RPC RBAC; returns `codes.PermissionDenied` on denial
+`FullUnaryInterceptors` / `FullStreamInterceptors` are `Observability*` followed by `Protected*`. Logging wraps auth, so calls that auth rejects are logged. The verified identity flows back to the logging interceptor through a holder in the context, which the context interceptor fills.
 
 > Source: [`docs/architecture/mermaid/grpc-interceptors.mmd`](docs/architecture/mermaid/grpc-interceptors.mmd)
 
 ```mermaid
 sequenceDiagram
-    participant Client as gRPC Client
+    participant Client as gRPC client
     participant PR as PanicRecovery
     participant RI as RequestID
     participant TR as Tracing
     participant ME as Metrics
     participant LO as Logging
     participant AU as RequireAuth
-    participant CM as ContextInterceptor
-    participant H as gRPC Handler
+    participant CM as Context
+    participant TO as Timeout (innermost)
+    participant H as Handler
 
-    Note over PR,CM: Registered via FullUnaryInterceptors(cfg)<br/>metrics.Init called once (sync.Once)
+    Note over PR,CM: FullUnaryInterceptors(cfg) = Observability* + Protected*<br/>append TimeoutUnaryInterceptor(d) LAST so observability sees its result
 
-    Client ->>+ PR: Unary RPC call
-    Note over PR: defer recover() → codes.Internal on panic
+    Client ->>+ PR: RPC + metadata (traceparent, x-request-id, identity)
+    Note over PR: defer recover() → codes.Internal "internal server error"
 
     PR ->>+ RI: next
-    Note over RI: read/generate x-request-id<br/>store in Go context
+    Note over RI: read or generate x-request-id<br/>grpc.SetHeader echoes it to the client
 
     RI ->>+ TR: next
-    Note over TR: extract traceparent<br/>start OTel server span (scope=ServiceName)
+    Note over TR: extract traceparent from metadata (global propagator)<br/>span name = bounded grpc_method (unknown → rpc.method=_OTHER)
 
     TR ->>+ ME: next
-    Note over ME: record grpc_server_inflight_requests +1<br/>defer: observe duration + sizes
+    Note over ME: platform_grpc_server_inflight_requests +1
 
     ME ->>+ LO: next
-    Note over LO: defer: structured grpc_request log<br/>after response
+    Note over LO: installs identity holder in ctx
 
     LO ->>+ AU: next
-    alt missing x-user-id or x-tenant-id
-        AU -->> Client: codes.Unauthenticated
-    else metadata valid
+    alt health method: exactly /grpc.health.v1.Health/Check, Watch or List
+        AU ->> H: bypass auth, context and RBAC
+    else missing, blank or REPEATED x-user-id / x-tenant-id
+        AU -->> LO: codes.Unauthenticated (missing / blank / ambiguous)
+    else identity valid
         AU ->>+ CM: next
-        Note over CM: build RequestContext{UserID,TenantID,Roles,ClientIP}<br/>store in Go context
-
-        CM ->>+ H: next
-        H -->>- CM: response, error
+        alt roles over 4096 bytes or 64 roles (ParseRolesStrict)
+            CM -->> AU: codes.Unauthenticated "invalid tenant roles"
+        else ok
+            Note over CM: RequestContext (TraceID from active span)<br/>fill the logging holder with verified identity
+            CM ->>+ TO: next
+            Note over TO: cap deadline at d (earlier client deadline kept)
+            TO ->>+ H: unary: inline · stream: handler goroutine
+            H -->>- TO: response, error
+            TO -->>- CM: result, or DeadlineExceeded at the cap
+        end
         CM -->>- AU: return
-        AU -->>- LO: return
     end
+    AU -->>- LO: return
 
     LO -->>- ME: return
-    Note over LO: grpc_request log written
+    Note over LO: grpc_request log — Info OK · Warn client codes (incl. DeadlineExceeded) · Error server codes<br/>code via grpcStatus: status.FromError, else status.FromContextError
     ME -->>- TR: return
-    Note over ME: metrics observed
+    Note over ME: handled_total{grpc_method, grpc_code, status_class, error_class} · duration · sizes
     TR -->>- RI: return
+    Note over TR: rpc.response.status_code (e.g. CANCELLED) + rpc.grpc.status_code<br/>span status Error for any non-nil error
     RI -->>- PR: return
-    PR -->>- Client: response
+    PR -->>- Client: response + x-request-id header
 ```
+
+**Interceptor order:**
+
+```
+PanicRecovery ── RequestID ── Tracing ── Metrics ── Logging ── RequireAuth ── Context ── [RequirePermission] ── [Timeout] ── Handler
+  ← pre-handler, left to right ──────────────────────────────────────────────────────────────────────────────────────┘
+  ── post-handler, right to left: span end, grpc_request log, metric observation ──────────────────────────────────────
+```
+
+**Bounded method names.** `label.GRPCMethod` maps `info.FullMethod` to `unknown` unless it matches `^/[A-Za-z0-9_.]+/[A-Za-z0-9_]+$`, is at most 256 bytes and, once `RegisterKnownMethods` has run, is a registered method. A server using `grpc.UnknownServiceHandler` (proxies, muxes) cannot be made to mint unbounded metric series or span names. The allow-list is **process-wide and additive**: call `RegisterKnownMethods` for every server, after every service (including `RegisterHealth`) is registered.
+
+**Status classification.** `grpcStatus` mirrors grpc-go: `status.FromError`, else `status.FromContextError`. A handler returning a plain `context.DeadlineExceeded` is therefore recorded, logged and traced as `DeadlineExceeded`, matching what the client receives. Spans carry `rpc.response.status_code` with canonical names (`CANCELLED`, `DEADLINE_EXCEEDED`, ...) plus the legacy integer `rpc.grpc.status_code`. Span status is Error for any non-nil error.
+
+---
+
+## Identity, authentication and request context
+
+Identity is trusted, not verified: the gateway authenticates and injects `x-user-id`, `x-tenant-id` and `x-tenant-roles`. This library's job is to reject anything **ambiguous, malformed or oversized**, and to keep unverified values out of verified fields.
+
+> Source: [`docs/architecture/mermaid/auth-context-flow.mmd`](docs/architecture/mermaid/auth-context-flow.mmd)
+
+```mermaid
+flowchart TD
+    A(["Protected request / RPC arrives"]) --> H{"gRPC health method?<br/>exact match: /grpc.health.v1.Health/Check · Watch · List"}
+    H -- yes --> PASS(["handler — no identity required"])
+    H -- "no (HTTP always no)" --> R{"x-user-id / x-tenant-id<br/>more than one value?"}
+    R -- yes --> AMB["401 ambiguous ... header<br/>gRPC: Unauthenticated ambiguous ... metadata"]
+    R -- no --> V{"present, non-blank, ≤ 256 bytes,<br/>no control characters?"}
+    V -- no --> MISS["401 / Unauthenticated<br/>gRPC distinguishes missing vs blank"]
+    V -- yes --> RL["join repeated x-tenant-roles with ','<br/>ParseRolesStrict: tokens [a-zA-Z0-9_-]+ ≤ 64 chars,<br/>invalid tokens dropped, deduplicated"]
+    RL --> CAP{"header > 4096 bytes<br/>or > 64 distinct roles?"}
+    CAP -- yes --> BADR["401 invalid tenant roles<br/>gRPC: Unauthenticated invalid tenant roles"]
+    CAP -- no --> BC["ContextService.BuildContext<br/>RequestContext{TenantID, UserID, Roles, TraceID, ClientIP}"]
+    BC -- "builder error" --> BUILD["sentinel (missing user / tenant id): 401 / Unauthenticated<br/>other: HTTP 400 · gRPC InvalidArgument — invalid request context<br/>internal detail only in the sanitized warn log"]
+    BC -- ok --> STORE["HTTP: store in the Gin context (c.Set)<br/>gRPC: store in the Go context + fill logging identity holder"]
+    STORE --> NEXT(["RequirePermission (optional) → handler"])
+
+    AMB --> AUDIT
+    MISS --> AUDIT
+    BADR --> AUDIT
+    BUILD --> AUDIT
+    AUDIT["warn auth: request rejected / context: request rejected<br/>reason · method · route · status · client_ip · trace_id · request_id<br/>claimed_user_id · claimed_tenant_id (sanitized, 256-byte cap)<br/>access log uses claimed_* — never tenant_id/user_id"]
+```
+
+| Rule | HTTP | gRPC |
+|---|---|---|
+| Repeated `x-user-id` / `x-tenant-id` | `401 ambiguous <h> header` (`identity.go`) | `Unauthenticated "ambiguous <key> metadata"` (`checkRequiredMeta`, after the missing check) |
+| Missing / blank / >256 bytes / control chars | `401` | `Unauthenticated` (missing vs blank distinguished) |
+| Repeated `x-tenant-roles` | joined with `,` | joined with `,` |
+| Roles over 4096 bytes or 64 roles | `401 invalid tenant roles` (`ParseRolesStrict`) | `Unauthenticated "invalid tenant roles"` (`ParseRolesStrict`) |
+| `BuildContext` failure | sentinels → `401 missing tenant id / missing user id`; other → `400 invalid request context`, sanitized warn log | sentinels → `Unauthenticated`; other → `InvalidArgument "invalid request context"` |
+| Where the context is stored | Gin context (`c.Set`) — not `c.Request.Context()` | Go context |
+| Health probes | register `HealthHandler` before the protected group | exactly `/grpc.health.v1.Health/{Check,Watch,List}` bypass auth, context and RBAC |
+| `ClientIP` | `c.ClientIP()` (respects `SetTrustedProxies`) | `peer.FromContext`, guarded against a nil `Addr` |
+| `TraceID` | from the active span | from the active span when valid |
+
+**Verified vs claimed in logs.** The access log writes `tenant_id`/`user_id` only from a `RequestContext` that was actually built. When `RequireAuth` or `ContextMiddleware` rejected the request, or the route is public, client-supplied values go to `claimed_tenant_id`/`claimed_user_id`, sanitized and capped at 256 bytes. A spoofed header can never appear in a verified field.
+
+---
+
+## Authorization (RBAC) flow
+
+`AuthZMiddleware` (HTTP) and the AuthZ interceptors (gRPC) are installed per route / per RPC, after the protected chain. Both delegate the decision to the consumer's `Authorizer`.
+
+> Source: [`docs/architecture/mermaid/rbac-middleware-flow.mmd`](docs/architecture/mermaid/rbac-middleware-flow.mmd)
+
+```mermaid
+sequenceDiagram
+    participant Chain as Protected chain (RequireAuth + Context)
+    participant AZ as AuthZMiddleware / AuthZ interceptor
+    participant A as Authorizer (consumer-implemented)
+    participant H as Handler
+
+    Chain ->>+ AZ: next (per route / per RPC)
+
+    alt gRPC health method (exact match)
+        AZ ->> H: bypass
+    else no RequestContext in context (RequirePermission placed before Protected*)
+        AZ -->> Chain: HTTP 500 · gRPC FailedPrecondition<br/>"request context missing — ensure ProtectedUnaryInterceptors ran first"
+    else authorizer is nil
+        AZ -->> Chain: 500 / codes.Internal "internal server error"
+    else RequestContext present
+        AZ ->>+ A: Authorize(ctx, rc, action, resource)
+        Note over A: ctx carries deadline, cancellation, trace span<br/>rc carries TenantID, UserID, Roles — tenant-scoped policy
+        alt error wraps ErrForbidden
+            A -->> AZ: ErrForbidden
+            Note over AZ: warn "authz: access denied"<br/>{tenant_id, user_id, roles, action, resource}
+            AZ -->> Chain: 403 / codes.PermissionDenied "forbidden"
+        else any other error
+            A -->> AZ: err
+            Note over AZ: error "authz: internal error" (sanitized)<br/>detail never sent to the client
+            AZ -->> Chain: 500 / codes.Internal "internal server error"
+        else nil
+            A -->>- AZ: nil
+            AZ ->>+ H: next
+            H -->>- AZ: response
+        end
+    end
+    AZ -->>- Chain: return
+
+    Note over AZ,A: NewDemoRBAC (reference only): read → allow · delete → admin role · everything else → deny · nil rc → deny
+```
+
+`Authorize(ctx context.Context, rc *RequestContextData, action, resource string) error` gets the request context (deadline, cancellation, span) and the full `RequestContext`, including `TenantID`, so production IAM/OPA policies can be tenant-scoped and time-bounded. The return contract is three-valued: `nil` allows; an error wrapping `ErrForbidden` denies with `403` / `PermissionDenied`; any other error is an internal failure (`500` / `Internal`) that is logged and never forwarded to the client.
+
+---
+
+## Panic and abort recovery
+
+Panic handling is split across four layers that each record their own signal and then re-panic, so a panic is counted **exactly once** in every signal and recovery happens only at the outermost layer. `http.ErrAbortHandler`, the sentinel net/http and `httputil.ReverseProxy` use when a client goes away, is recognised at every layer as a client abort, not a crash.
+
+> Source: [`docs/architecture/mermaid/panic-recovery-flow.mmd`](docs/architecture/mermaid/panic-recovery-flow.mmd)
+
+```mermaid
+sequenceDiagram
+    participant Srv as net/http server
+    participant PR as PanicRecovery (outermost)
+    participant TR as Tracing
+    participant ME as Metrics
+    participant LO as Logging
+    participant H as Handler
+
+    Srv ->>+ PR: ServeHTTP
+    PR ->>+ TR: c.Next()
+    TR ->>+ ME: c.Next()
+    ME ->>+ LO: c.Next()
+    LO ->>+ H: c.Next()
+
+    alt handler panics with http.ErrAbortHandler (or a wrapped one)
+        H --x LO: panic(ErrAbortHandler)
+        Note over LO: recover → Debug log, aborted=true<br/>status = written status, else 499 → re-panic
+        LO --x ME: re-panic same value
+        Note over ME: counted as 4xx client_error (499)<br/>panic counter NOT incremented → re-panic
+        ME --x TR: re-panic
+        Note over TR: span gets http.aborted, NOT Error status<br/>span ended BEFORE re-panic (no SDK exception event)
+        TR --x PR: re-panic
+        Note over PR: Debug "request aborted"<br/>re-panic the BARE http.ErrAbortHandler
+        PR --x Srv: panic(http.ErrAbortHandler)
+        Note over Srv: identity match → connection aborted silently, no stack trace
+    else handler panics with any other value
+        H --x LO: panic(value)
+        Note over LO: panicked sentinel → http_request at Error, status 500
+        LO --x ME: unwind
+        Note over ME: platform_http_panics_total +1 · requests_total as 5xx
+        ME --x TR: unwind
+        Note over TR: RecordError(sanitized panic value) · status Error · span ended
+        TR --x PR: unwind
+        Note over PR: Error "panic recovered" — sanitized value + stack<br/>(stderr log.Printf when logger is nil)
+        alt response not yet written (even if handler called c.Abort())
+            PR ->> Srv: 500 JSON {error, status, trace_id, request_id}
+        else response already partly written
+            Note over PR: c.Abort() then panic(http.ErrAbortHandler)<br/>client sees a truncated response, never a complete 200
+            PR --x Srv: panic(http.ErrAbortHandler)
+        end
+    else no panic
+        H -->>- LO: return
+        LO -->>- ME: return
+        ME -->>- TR: return
+        TR -->>- PR: return
+    end
+    PR -->>- Srv: return
+```
+
+| Case | Client sees | Metrics | Access log | Span |
+|---|---|---|---|---|
+| `panic("boom")`, nothing written | `500` JSON | `platform_http_panics_total` +1, 5xx | Error, status 500 | Error + sanitized exception |
+| `panic("boom")` after a partial write | truncated response (connection aborted) | panic +1, 5xx | Error | Error |
+| `panic(http.ErrAbortHandler)` (or wrapped) | connection closed, no stack trace in server logs | 4xx `client_error`, status 499 (or the status already written) | Debug, `aborted=true` | `http.aborted`, not Error |
+
+gRPC is the same pattern: `Unary/StreamPanicRecoveryInterceptor` is outermost, and the tracing, metrics and logging interceptors use `panicked` sentinels. The tracing interceptor records the **real** panic value through an inner `recover` + re-panic before recovery converts it to `codes.Internal`.
+
+---
+
+## Timeouts
+
+A deadline only helps if the layers that report on the request see the same outcome the client does. Both stacks therefore place the timeout **inside** observability.
+
+> Source: [`docs/architecture/mermaid/timeout-flow.mmd`](docs/architecture/mermaid/timeout-flow.mmd)
+
+```mermaid
+flowchart TD
+    subgraph http["HTTP — Config.RequestTimeout > 0 (innermost observability handler)"]
+        H1(["TimeoutMiddleware(d)"]) --> H2["c.Request = WithContext(context.WithTimeout(d))"]
+        H2 --> H3["c.Next() — handler runs on the same goroutine<br/>it must honour c.Request.Context()"]
+        H3 --> H4{"ctx error is DeadlineExceeded?<br/>(client Canceled is NOT a timeout)"}
+        H4 -- no --> H9(["return — handler's response stands"])
+        H4 -- yes --> H5{"response written, or status changed from 200?<br/>(e.g. c.Status(204) after the deadline)"}
+        H5 -- yes --> H9
+        H5 -- no --> H6["platform_http_request_timeouts_total +1<br/>503 request timeout JSON"]
+        H6 --> H7(["Metrics / Logging / Tracing are OUTSIDE it:<br/>they record the same 503 the client receives"])
+    end
+
+    subgraph grpcu["gRPC unary — TimeoutUnaryInterceptor(d), appended after Full*"]
+        U1(["capDeadline: min(client deadline, now + d)"]) --> U2["handler(ctx) inline — must honour ctx"]
+    end
+
+    subgraph grpcs["gRPC stream — TimeoutStreamInterceptor(d), appended after Full*"]
+        S1(["client deadline earlier than d?"]) -- yes --> S2["run handler inline"]
+        S1 -- no --> S3["start handler in a goroutine on timeoutStream"]
+        S3 --> S4{"select: handler done or capped ctx Done"}
+        S4 -- "handler done" --> S5["return its result<br/>re-raise a handler panic with its original value"]
+        S4 -- "client cancelled" --> S5b["wait for the handler's own result"]
+        S4 -- "cap reached" --> S6["mark expired → every Send/Recv/SetHeader/SendHeader/SetTrailer<br/>on the wrapper now returns DeadlineExceeded"]
+        S6 --> S7["return status DeadlineExceeded<br/>grpc-go tears the stream down → abandoned handler exits"]
+        S7 --> S8(["observability (outside) records DeadlineExceeded<br/>abandoned handler's later result / panic is discarded (panic logged to stderr)"])
+    end
+```
+
+- **HTTP.** `Config.RequestTimeout` appends `TimeoutMiddleware` as the innermost observability handler. Only `context.DeadlineExceeded` produces the `503`; a client disconnect (`Canceled`) does not. A response that was written, or whose status the handler changed from the default 200 (a `204` set after the deadline), is never overwritten. The handler goroutine is not interrupted: handlers must pass `c.Request.Context()` to their DB and HTTP calls.
+- **gRPC unary.** The deadline is capped (an earlier client deadline is kept) and the handler runs inline. It must honour `ctx`.
+- **gRPC stream.** The handler runs in a goroutine so a handler blocked in `RecvMsg` against an idle client cannot outlive the cap. At the deadline the wrapper starts failing every stream call with `DeadlineExceeded`, the interceptor returns `DeadlineExceeded`, and grpc-go tears the stream down. Because the interceptor sits innermost, metrics and logs record `DeadlineExceeded` even when the abandoned handler later swallows the error and returns `nil`. `TestGRPC_StreamTimeoutInnermost_MetricsMatchClient` pins this.
+
+---
+
+## Tracing initialisation
+
+Tracing is installed by the first stack constructor for its `Config`. Services that need spans earlier call `InitTracingWithConfig` with the same identity. The global provider is a **delegating provider owned by this package**: it is installed once, and swapping SDK providers replaces only its inner pointer.
+
+> Source: [`docs/architecture/mermaid/tracing-initialization.mmd`](docs/architecture/mermaid/tracing-initialization.mmd)
+
+```mermaid
+flowchart TD
+    A(["Tracing entry point"]) --> B{"Which one?"}
+
+    B -- "InitTracingWithConfig(TracingConfig)" --> V{"ServiceName empty?"}
+    V -- yes --> VE(["ErrServiceNameRequired"])
+    V -- no --> INIT
+    B -- "InitTracing / InitTracingFromEnv<br/>(OTEL_SERVICE_NAME → APP_NAME, no library default)" --> P{"service name empty?"}
+    P -- yes --> PROV["stderr warning<br/>provisional = true, service.name = unknown_service"]
+    P -- no --> INIT
+    PROV --> INIT
+    B -- "EnsureTracing / ensureInitTelemetry<br/>(ObservabilityMiddlewares, gRPC constructors)" --> E{"current global provider?"}
+    E -- "ours, active and non-provisional<br/>(or this call is provisional too)" --> KEEP(["keep it — upgrade the error logger if it had none"])
+    E -- "a consumer's own *sdktrace.TracerProvider" --> KEEP
+    E -- "ours with a provisional provider,<br/>none yet, or ours after Shutdown" --> INIT
+
+    INIT["install under shutdownMu"] --> R["initTracing:<br/>installErrorHandler → otel_error to Config.Logger, else stderr<br/>Resource = SDK defaults + service.name, service.version,<br/>service.namespace (domain), deployment.environment.name"]
+    R --> S["Sampler = ParentBased(root)<br/>root: AlwaysSample ≥ 1 · NeverSample ≤ 0 · TraceIDRatioBased<br/>IgnoreRemoteParentSampled → WithRemoteParentSampled(root)"]
+    S --> X{"Endpoint set?"}
+    X -- no --> NOEXP["exporter disabled — spans in-process only"]
+    X -- yes --> EXP{"otlptracegrpc.New ok?"}
+    EXP -- no --> FAIL["warn otel_exporter_init_failed<br/>in-process provider — valid trace IDs, nothing exported"]
+    EXP -- yes --> BATCH["WithBatcher(exporter)"]
+    NOEXP --> TP
+    FAIL --> TP
+    BATCH --> TP
+    TP["new *sdktrace.TracerProvider<br/>propagator: TraceContext (+ Baggage when enabled)<br/>info otel_tracing_initialized (effective config, once)"]
+    TP --> SWAP["global.inner.Store(tp) — atomic swap<br/>otel.SetTracerProvider(global) only if not already installed"]
+    SWAP --> OLD(["after unlocking: old provider ForceFlush + Shutdown (5s budget)<br/>return shutdown func"])
+
+    subgraph deleg["Delegating global provider (provider.go)"]
+        D1["Tracer(name) → delegatingTracer"] --> D2["every Start: load current inner provider<br/>cache SDK tracer per provider generation"]
+        D2 --> D3["no inner provider (before init / after Shutdown) → no-op span<br/>that keeps the parent span context"]
+    end
+
+    SD(["Shutdown()"]) --> SD1["inner = nil, flush + shut down the active provider<br/>global provider STAYS installed — tracers captured now<br/>come back to life after the next init"]
+```
+
+**Why a delegating provider.** OpenTelemetry's global delegate binds once, and instrumentation (pgcommon's `Config.Tracer`, package-level `otel.Tracer`, otelgrpc/otelgin handlers) captures a provider at construction. If the global itself were replaced, every tracer captured before the replacement (for example, under a provisional `unknown_service` provider created by `InitTracingFromEnv`) would keep pointing at a shut-down provider and silently drop its spans. With the delegating provider, every captured tracer resolves the current SDK provider on each `Start`: one atomic load, no lock, about the same cost as a direct SDK tracer. `Shutdown` leaves the delegating provider installed with no inner provider, so a provider captured during a restart is live again after re-init. A consumer that installed its own `*sdktrace.TracerProvider` is respected and never replaced.
+
+| Setting | Default | Notes |
+|---|---|---|
+| Endpoint | `OTEL_EXPORTER_OTLP_ENDPOINT`, else `localhost:4317` | Exporter creation failure → `otel_exporter_init_failed` warning + in-process provider |
+| TLS | on, unless `APP_ENV` is `dev`/`local` (trimmed, lowercased) | `OTEL_EXPORTER_OTLP_INSECURE` overrides |
+| Sampler | `ParentBased(ratio)`: `1.0` in dev/local, `0.1` otherwise | `OTEL_TRACES_IGNORE_REMOTE_PARENT_SAMPLED=true` re-samples remote-sampled parents at the ratio (edge services) |
+| Resource | `service.name`, `service.version`, `service.namespace` (domain), `deployment.environment.name` | Schemaless merge with `resource.Default()`, so no schema-URL conflict |
+| Propagator | W3C TraceContext (+ Baggage when `OTEL_PROPAGATOR_BAGGAGE=true`) | |
+| SDK errors | `otel_error` to `Config.Logger`, else stderr | A later stack with a logger upgrades a logger-less handler |
+
+---
+
+## Metrics initialisation and process identity
+
+Metrics initialisation is **transactional, retryable and identity-checked**. It replaced a `sync.Once` that silently kept the first caller's identity and could leave half-registered collectors behind.
+
+> Source: [`docs/architecture/mermaid/metrics-initialization.mmd`](docs/architecture/mermaid/metrics-initialization.mmd)
+
+```mermaid
+flowchart TD
+    A(["MustInitFromConfig(opts) — from every pkg constructor"]) --> B["ApplyEnvDefaults<br/>BuildVersion ← BUILD_VERSION ← unknown<br/>Domain ← OBSERVABILITY_DOMAIN<br/>Environment ← APP_ENV ← ENVIRONMENT (trim + lowercase)"]
+    B --> C["resolve()<br/>registry checks: domain, service, environment vocabulary<br/>SanitizeVersion: strip refs/tags/ · refs/heads/, bad chars → _,<br/>leading non-alnum dropped, ≤ 64 chars (warn once)"]
+    C -- invalid --> X(["ErrDomainRequired / registry error<br/>MustInitFromConfig panics at startup"])
+    C -- ok --> L["initMu.Lock()"]
+    L --> D{"collector set already published?"}
+
+    D -- no --> E["initCollectors: registryBuilder builds every platform_* collector<br/>name, help, labels, buckets from registry.json<br/>const labels domain · service · environment"]
+    E --> F["registerAll with Register (not MustRegister)"]
+    F -- "any failure" --> RB(["unregister the ones already registered<br/>return error — nothing published, call can be retried"])
+    F -- ok --> G["publish collector set via atomic.Pointer<br/>platform_build_info{version} = 1<br/>exported vars refreshed as a read-only test view"]
+    G --> OK(["nil"])
+
+    D -- yes --> T{"AllowIdentityChangeForTesting?<br/>(test/testenv only)"}
+    T -- yes --> OK
+    T -- no --> M{"same domain, service, environment?<br/>version: unknown matches anything"}
+    M -- no --> MM(["ErrIdentityMismatch naming the field<br/>pkg constructors panic at startup"])
+    M -- yes --> U{"established version unknown<br/>and this call has a real one?"}
+    U -- yes --> UP["upgradeVersion: relabel platform_build_info<br/>publish a copy of the set with the real version"]
+    U -- no --> OK
+    UP --> OK
+
+    subgraph rec["Recording hot path (record.go)"]
+        R1["RecordHTTP / RecordGRPC / HTTPActiveInc / RecordHTTPPanic / ...<br/>load the atomic set — nil before init → no-op<br/>negative sizes (UnknownSize) are not observed"]
+    end
+```
+
+**Identity rules.** `domain`, `service` and `environment` must match exactly across every stack in a process. `unknown` (no `BuildVersion`, no `BUILD_VERSION`) matches any version in either order: a later `unknown` inherits the established version, and a later real version upgrades an established `unknown` (relabelling `platform_build_info`). Two different real versions are `ErrIdentityMismatch`. Invalid versions (`feat/x`, `refs/tags/v1.4.0`, `:`-separated, over 64 characters) are sanitised to the registry pattern `^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$` with a one-time warning. Startup fails only if nothing usable remains.
+
+**Concurrency.** Initialisation runs under `initMu`. The collector set is published through an `atomic.Pointer`, which the recording helpers load on every observation, so recording never races with re-initialisation and is a no-op before init. The exported collector vars (`metrics.HttpRequestsTotal`, ...) are a read-only view for tests. `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())` builds an isolated set for tests. `metrics.AllowIdentityChangeForTesting(true)`, enabled by `test/testenv`, restores first-identity-wins only for test processes that build stacks with different service names.
+
+| Metric | Type | Labels (+ `domain`, `service`, `environment`) |
+|---|---|---|
+| `platform_http_requests_total` | Counter | `method`, `route`, `status_class`, `error_class` |
+| `platform_http_request_duration_seconds` | Histogram | `method`, `route`, `status_class`, `error_class` |
+| `platform_http_request_size_bytes` / `_response_size_bytes` | Histogram (`payload_size`, up to 16 MiB) | `method`, `route`, `status_class`, `error_class` |
+| `platform_http_active_requests` | Gauge | `route` |
+| `platform_http_panics_total` | Counter | `method`, `route` |
+| `platform_http_rate_limited_requests_total` | Counter | `method`, `route` |
+| `platform_http_request_timeouts_total` | Counter | `method`, `route` |
+| `platform_grpc_server_handled_total` | Counter | `grpc_method`, `grpc_code`, `status_class`, `error_class` |
+| `platform_grpc_server_handling_seconds` | Histogram | `grpc_method`, `status_class`, `error_class` |
+| `platform_grpc_server_request_size_bytes` / `_response_size_bytes` | Histogram | `grpc_method`, `status_class`, `error_class` |
+| `platform_grpc_server_inflight_requests` | Gauge | `grpc_method` |
+| `platform_grpc_panics_total` / `platform_grpc_rate_limited_requests_total` | Counter | `grpc_method` |
+| `platform_build_info` | Gauge (= 1) | `version` (the only series carrying it) |
+
+HTTP `method` is bounded (non-standard methods → `OTHER`); `route` is the Gin template or `unknown`; 1xx is `2xx`/`success` (WebSocket upgrades are not errors); requests of unknown length (`Content-Length: -1`) are not observed in the size histogram.
+
+---
+
+## Observability registry and governance
+
+The registry is the contract. Shared metrics exist **only** as registry entries, collectors are built from them, and CI enforces them in every consuming service.
+
+> Source: [`docs/architecture/mermaid/registry-governance.mmd`](docs/architecture/mermaid/registry-governance.mmd)
+
+```mermaid
+graph LR
+    subgraph sources["Contract sources"]
+        events_reg["platform-events released registry<br/>(imported verbatim — wins on conflict)"]
+        pg_reg["platform-pgcommon released registry<br/>(imported verbatim — wins on conflict)"]
+        own["gincommon entries<br/>platform_http_* · platform_grpc_* · platform_build_info<br/>status proposed, pending governance"]
+    end
+
+    subgraph registry["internal/obsregistry/registry.json — embedded, 110 entries"]
+        entries["metrics: 5 approved · 48 proposed · 57 removed (legacy, with replacements)<br/>labels: vocabulary, patterns, max_values, cardinality<br/>prohibited labels (tenant_id, user_id, ...)<br/>bucket presets · owners · governance_notes"]
+        parse["Parse: strict — unknown fields, duplicates,<br/>undefined labels/buckets, legacy without replacement"]
+    end
+
+    subgraph runtime["Runtime (in every consuming service)"]
+        builder["registryBuilder → platform_* collectors<br/>(code cannot drift from the contract)"]
+        shared["NewShared{Counter,Gauge,Histogram}Vec(reg, name)<br/>Tier 1/2 from the entry"]
+        custom["New{Counter,Gauge,Histogram}Vec — Tier 3<br/>CheckCustom: domain_service_ prefix, suffixes,<br/>no prohibited / injected labels, not a registry or legacy name"]
+    end
+
+    subgraph ci["CI enforcement"]
+        validate["obsregistry.Validate(gatherer, opts) in service tests<br/>namespace · naming · suffixes · required labels ·<br/>registry compliance · label vocabulary · cardinality · gather errors"]
+        check["metricslint check -url / files (text or OpenMetrics)<br/>-strict · -allow-proposed-owner list"]
+        refs["metricslint refs dashboards/ rules/ slo/ hpa/<br/>legacy + unregistered names (skips .git, node_modules, vendor;<br/>64 MiB per file; I/O problems → exit 2)"]
+        inv["metricslint inventory → docs/observability/metric-registry.md<br/>make metrics-lint: drift check + promtool check/test rules"]
+    end
+
+    subgraph mirrors["Mirrors"]
+        fastapi["platform-fastapicommon (Python)<br/>vendored copy — re-copy on every change"]
+    end
+
+    events_reg --> entries
+    pg_reg --> entries
+    own --> entries
+    entries --> parse
+    parse --> builder
+    parse --> shared
+    parse --> custom
+    parse --> validate
+    parse --> check
+    parse --> refs
+    parse --> inv
+    entries -.->|"copied"| fastapi
+```
+
+| Tier | Prefix | Who defines it | How it's built |
+|---|---|---|---|
+| 1 | `platform_*` | Registry (cross-domain) | `registryBuilder` (gincommon's own), `NewShared*Vec` |
+| 2 | `<domain>_*` | Registry (one domain, e.g. the four `iam_*` entries) | `NewShared*Vec` |
+| 3 | `<domain>_<service>_*` | The service | `New*Vec`, validated by `CheckCustom` and `metricslint` |
+
+`domain`, `service` and `environment` are const labels injected centrally, never declared by instrumentation. Each label name has one meaning: platform HTTP uses `method` and platform gRPC uses `grpc_method`. Byte-size histograms use `_bytes` through an explicit `unit: bytes` exception to the `_seconds` rule, which is pending governance ratification.
 
 ---
 
 ## Observability stack
 
-Two observability concerns run per request: **Prometheus metrics** (synchronous, in-process) and **OpenTelemetry spans** (async, exported via OTLP/gRPC). They are independent — enabling one does not require the other.
-
 > Source: [`docs/architecture/mermaid/observability-stack.mmd`](docs/architecture/mermaid/observability-stack.mmd)
 
 ```mermaid
 graph LR
-    subgraph req["Per-request (HTTP)"]
-        pr["PanicRecoveryMiddleware<br/>· defer recover()<br/>· log panic + stack trace<br/>· record OTel error on span<br/>· emit http_panic_total metric<br/>· return 500 JSON"]
-        ri["RequestIDMiddleware<br/>· read x-request-id or generate UUID<br/>· store in Gin context<br/>· echo X-Request-ID header"]
-        tr["TracingMiddleware<br/>· extract W3C traceparent<br/>· start OTel HTTP span<br/>· set span attributes (method, route, status)<br/>· echo X-Trace-ID header"]
-        ch["CorrelationHeadersMiddleware<br/>· propagate trace + request headers<br/>· downstream calls inherit context"]
-        me["MetricsMiddleware<br/>· increment http_active_requests<br/>· defer: observe duration, sizes, status class<br/>· log WARN on 429"]
-        lo["LoggingMiddleware<br/>· defer: structured http_request log<br/>· sanitizes raw header values<br/>(control chars stripped, ≤256 bytes)"]
+    subgraph req["Per request — ObservabilityMiddlewares / Observability*Interceptors"]
+        pr["PanicRecovery<br/>· outermost defer recover()<br/>· log sanitized panic + stack<br/>· 500 JSON / codes.Internal<br/>· ErrAbortHandler → abort quietly"]
+        ri["RequestID<br/>· reuse valid x-request-id or UUID<br/>· X-Request-ID header / grpc.SetHeader"]
+        tr["Tracing<br/>· extract traceparent (ParentBased)<br/>· server span, bounded name<br/>· panic + error status"]
+        ch["CorrelationHeaders (HTTP)<br/>· X-Trace-ID, X-Request-ID before the handler"]
+        me["Metrics<br/>· active / inflight gauge<br/>· defer: counter, duration, sizes<br/>· 429 counted, warn sampled 1/route/s"]
+        lo["Logging<br/>· defer: http_request / grpc_request<br/>· sanitized headers, verified vs claimed identity"]
     end
 
-    subgraph prom["Prometheus (HTTP)"]
-        p1["http_requests_total"]
-        p2["http_request_duration_seconds"]
-        p3["http_request/response_size_bytes"]
-        p5["http_active_requests"]
-        p6["http_panic_total"]
-        p7["rate_limited_requests_total"]
-        p8["build_info (gauge=1)"]
+    subgraph prom["Prometheus — MetricsHandler() (ContinueOnError)"]
+        p_http["platform_http_requests_total · _request_duration_seconds<br/>_request_size_bytes · _response_size_bytes · _active_requests<br/>_panics_total · _rate_limited_requests_total · _request_timeouts_total"]
+        p_grpc["platform_grpc_server_handled_total · _handling_seconds<br/>_request_size_bytes · _response_size_bytes · _inflight_requests<br/>platform_grpc_panics_total · _rate_limited_requests_total"]
+        p_build["platform_build_info{version} = 1"]
+        p_err["promhttp_metric_handler_errors_total{cause}<br/>(exempt prefix — failing custom collector)"]
+        p_const["const labels on every platform series:<br/>domain · service · environment"]
     end
 
     subgraph otel["OpenTelemetry"]
-        ot1["HTTP spans<br/>TracingMiddleware → OTel HTTP span<br/>PanicRecovery → span error annotation"]
-        ot2["OTLP/gRPC export<br/>→ OTel Collector → Tempo"]
+        ot_span["server spans · resource: service.name, service.version,<br/>service.namespace, deployment.environment.name"]
+        ot_prov["delegating global provider → SDK provider<br/>BatchSpanProcessor"]
+        ot_exp["OTLP/gRPC → collector → Tempo<br/>(in-process fallback when the exporter cannot be created)"]
     end
 
-    me --> p1
-    me --> p2
-    me --> p3
-    me --> p5
-    pr --> p6
-    me --> p7
-    tr --> ot1
-    pr --> ot1
-    ot1 --> ot2
+    subgraph logs["Structured logs (Zap)"]
+        l_req["http_request / grpc_request<br/>method · route · status / grpc_code · duration_ms (float64)<br/>request_id · trace_id · tenant_id, user_id or claimed_*"]
+        l_sec["auth: request rejected · context: request rejected<br/>authz: access denied · panic recovered · request aborted"]
+        l_otel["otel_tracing_initialized · otel_exporter_init_failed · otel_error"]
+    end
+
+    subgraph rules["docker/prometheus/rules (reference)"]
+        r_rec["recording rules"]
+        r_slo["multi-window SLO burn-rate alerts<br/>(promtool tests in CI)"]
+    end
+
+    me --> p_http
+    me --> p_grpc
+    pr --> p_http
+    pr --> p_grpc
+    tr --> ot_span
+    ot_span --> ot_prov
+    ot_prov --> ot_exp
+    lo --> l_req
+    pr --> l_sec
+    p_http --> r_rec
+    p_grpc --> r_rec
+    r_rec --> r_slo
 ```
+
+The three signals are independent: metrics are synchronous in-process counters, spans are batched and exported asynchronously, and logs go to stdout and optionally `LOG_FILE`. Disabling or losing one never affects the others or the request. `MetricsHandler` uses `promhttp.ContinueOnError`, so one failing custom collector costs only its own series. The failure is counted in `promhttp_metric_handler_errors_total` and logged at most once per 5 minutes per distinct error.
 
 ---
 
 ## Consuming service wiring
 
-A typical service bootstrap combines the public API packages with the adapter implementations.
-
 > Source: [`docs/architecture/mermaid/consuming-service-wiring.mmd`](docs/architecture/mermaid/consuming-service-wiring.mmd)
 
 ```mermaid
 graph LR
-    subgraph service["Consuming service (your code)"]
+    subgraph svc["Consuming service (your code)"]
         main["main.go"]
-        routes["router.go<br/>r.Use(middlewares...)<br/>r.GET('/users', RequirePermission(...))"]
+        routes["router: r.Use(...) · api group · per-route RequirePermission"]
+        grpcsrv["grpc.NewServer(ChainUnary/StreamInterceptor(...))"]
+        authz["your Authorizer<br/>Authorize(ctx, *RequestContextData, action, resource)"]
+        out["outbound clients"]
     end
 
-    subgraph lib["platform-gincommon"]
-        logger_new["pkg/logger.NewLogger(env)"]
-        init_tr["pkg/gincommon.InitTracingFromEnv()"]
-        obs_mw["pkg/gincommon.ObservabilityMiddlewares(cfg)"]
-        prot_mw["pkg/gincommon.ProtectedMiddlewares(cfg)"]
-        def_mw["pkg/gincommon.DefaultMiddlewares(cfg)"]
-        rp["pkg/gincommon.RequirePermissionWithLogger<br/>(action, resource, auth, logger)"]
-        grpc_mw["pkg/grpccommon.DefaultUnaryInterceptors(cfg)"]
-        shutdown["pkg/gincommon.Shutdown(logger)<br/>flush spans + logger.Sync()"]
+    subgraph lib["platform-gincommon — pkg/ only"]
+        newlog["logger.NewLogger(APP_ENV)"]
+        cfg["gincommon.Config / grpccommon.Config<br/>ServiceName · Domain · Environment · BuildVersion · Logger<br/>RequestTimeout (HTTP)"]
+        early["gincommon.InitTracingWithConfig (optional — spans before the server)"]
+        obs["ObservabilityMiddlewares(cfg)<br/>(inits metrics + tracing)"]
+        prot["ProtectedMiddlewares(cfg)"]
+        rp["RequirePermissionWithLogger(action, resource, authz, log)"]
+        full["FullUnary/StreamInterceptors(cfg)<br/>+ Timeout*Interceptor(d) appended last"]
+        known["RegisterHealth(s) · RegisterKnownMethods(s)<br/>after all services are registered"]
+        prop["PropagateHeaders / PropagateIdentityHeaders<br/>UnaryClientInterceptor / UnaryClientIdentityInterceptor"]
+        mh["MetricsHandler() · NewShared*Vec · New*Vec"]
+        shut["Shutdown(log) — flush spans + logger.Sync()"]
     end
 
-    main -->|"APP_ENV"| logger_new
-    main -->|"OTEL_* env vars"| init_tr
-    logger_new -->|"port.Logger"| obs_mw
-    logger_new -->|"port.Logger"| prot_mw
-    obs_mw -->|"[]gin.HandlerFunc"| routes
-    prot_mw -->|"[]gin.HandlerFunc"| routes
-    main -->|"cfg{Logger, ServiceName}"| def_mw
-    def_mw -->|"[]gin.HandlerFunc"| routes
-    logger_new -->|"port.Logger"| rp
+    main --> newlog
+    newlog -->|"Logger"| cfg
+    main --> cfg
+    cfg --> early
+    cfg --> obs
+    cfg --> prot
+    cfg --> full
+    obs -->|"[]gin.HandlerFunc"| routes
+    prot -->|"[]gin.HandlerFunc"| routes
+    authz --> rp
     rp -->|"gin.HandlerFunc"| routes
-    main -->|"cfg{ServiceName}"| grpc_mw
-    grpc_mw -->|"[]grpc.UnaryServerInterceptor"| main
-    main -->|"defer on SIGTERM"| shutdown
+    full -->|"interceptors"| grpcsrv
+    grpcsrv --> known
+    out --> prop
+    routes --> mh
+    main -->|"after srv.Shutdown / GracefulStop"| shut
 ```
-
-**Consumer setup** (in the consuming service's `go.mod`):
-
-```
-# requires GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/* in the consumer's environment
-require github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon v1.x.x
-```
-
-**Minimal wiring example:**
 
 ```go
-// main.go
-import (
-    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
-    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/logger"
-)
-
 log, _ := logger.NewLogger(os.Getenv("APP_ENV"))
-defer gincommon.InitTracingFromEnv()()
-
 cfg := gincommon.Config{
-    Logger:      log,
-    ServiceName: "my-service",
+    Logger: log, ServiceName: "my-service", Domain: "iam",
+    Environment: os.Getenv("APP_ENV"), BuildVersion: os.Getenv("BUILD_VERSION"),
+    RequestTimeout: 30 * time.Second,
 }
-
 r := gin.New()
-r.Use(gincommon.DefaultMiddlewares(cfg)...)
-
-// per-route RBAC
-auth := gincommon.NewDemoRBAC()
-r.DELETE("/users/:id", gincommon.RequirePermissionWithLogger("delete", "users", auth, log))
-
-// graceful shutdown (after srv.Shutdown returns)
-defer gincommon.Shutdown(log)
+r.Use(gincommon.ObservabilityMiddlewares(cfg)...)       // metrics + tracing initialised here
+r.GET("/health", gincommon.HealthHandler())
+r.GET("/metrics", gin.WrapH(gincommon.MetricsHandler()))
+api := r.Group("/api", gincommon.ProtectedMiddlewares(cfg)...)
+api.DELETE("/items/:id", gincommon.RequirePermissionWithLogger("delete", "items", myAuthorizer, log), del)
+// ... srv.Shutdown(ctx) ...
+_ = gincommon.Shutdown(log)                                // flush spans + logger.Sync()
 ```
+
+The full HTTP and gRPC examples in [README.md](README.md#integrating-into-a-consuming-service) compile from an external module that imports only `pkg/`.
 
 ---
 
-## Documentation assets
+## Concurrency model
 
-Every public package ships a `doc.go` package overview. Architecture diagrams live as standalone Mermaid source files under `docs/architecture/mermaid/` and are embedded into this document as fenced code blocks. Each section carries a `> Source:` link to the originating `.mmd` file.
+| Shared state | Protection | Hot path cost |
+|---|---|---|
+| Metrics collector set | `initMu` for init; `atomic.Pointer` publish | one atomic load per observation |
+| Global tracer provider | `shutdownMu` for install/shutdown; inner provider in `atomic.Pointer` | one atomic load per span start (+ SDK tracer lookup) |
+| OTel error logger | `atomic.Pointer`, written under `shutdownMu` | read on SDK error only |
+| gRPC known-method allow-list | `sync.RWMutex` | read lock per RPC |
+| 429 log limiter | mutex; map keyed by route template (bounded, `unknown` for unmatched) | only on a 429 |
+| `/metrics` error-log limiter | mutex; at most 64 remembered error strings | only on a gather error |
+| gRPC logging identity holder | `atomic.Pointer` in the request context | per RPC |
+| gRPC stream size counters | mutex in `monitoredServerStream` (concurrent Send/Recv on bidi streams) | per message |
+| Stream timeout wrapper | atomic `expired` flag checked by every stream method | per message |
 
-> Source: [`docs/architecture/mermaid/documentation-assets.mmd`](docs/architecture/mermaid/documentation-assets.mmd)
-
-```mermaid
-graph LR
-    subgraph sources["Documentation sources"]
-        subgraph godoc_src["GoDoc  —  pkg/*/"]
-            doc_go["doc.go × 3<br/>package overview prose<br/>(entry point for pkgsite)"]
-            sym["exported symbol comments<br/>every func · type · method<br/>(enforced by revive linter)"]
-        end
-
-        subgraph arch_src["Architecture docs"]
-            mmd_files["docs/architecture/mermaid/<br/>10 × .mmd source diagrams"]
-            arch_md["ARCHITECTURE.md<br/>embeds mermaid blocks<br/>+ prose + symbol tables"]
-        end
-
-        subgraph claude_src["Claude Code guidance"]
-            claude_md[".claude/CLAUDE.md<br/>commands · architecture<br/>API reference · test layout<br/>extending the library"]
-        end
-    end
-
-    subgraph rendered["Rendered / consumed by"]
-        pkgsite["pkgsite (local)<br/>make godoc → localhost:8080"]
-        github_md["GitHub<br/>Markdown + Mermaid preview"]
-        ide["IDE hover<br/>go doc CLI"]
-        claude_ai["Claude Code<br/>context-aware coding assistance"]
-    end
-
-    doc_go  --> pkgsite
-    sym     --> pkgsite
-    sym     --> ide
-    mmd_files -->|"copied into<br/>fenced code blocks"| arch_md
-    arch_md --> github_md
-    claude_md --> claude_ai
-```
-
-Run `make godoc` to render the full package documentation locally using `pkgsite`:
-
-```
-make godoc   # → http://localhost:8080
-```
-
----
-
-## Execution model
-
-Understanding how middleware executes explains why observability signals are always accurate and why deferred operations are safe.
-
-**HTTP (`c.Next()` nested call stack):**
-
-```
-PanicRecovery.defer ─────────────────────────────────────────────────── (8) recover on panic
-  RequestID                                                               (1) set request ID
-    Tracing.defer ───────────────────────────────────────────────────── (7) finalise span attributes
-      CorrelationHeaders.defer ───────────────────────────────────────── (6) write response headers
-        Metrics.defer ───────────────────────────────────────────────── (5) observe duration + sizes
-          Logging.defer ───────────────────────────────────────────────  (4) write http_request log
-            RequireAuth                                                   (2) validate identity headers
-              ContextMiddleware                                           (3) build RequestContext
-                Handler ← executes here
-```
-
-- Steps 1–3 execute **before** the handler, in order.
-- Steps 4–8 (deferred) execute **after** the handler returns, in **reverse** order — innermost defer first, outermost last.
-- Duration, status code, and response size observed by Metrics (5) and Logging (4) are captured after the handler writes its response, ensuring accurate values.
-- Panic recovery (8) is the outermost defer, so it catches panics from all middleware and the handler.
-
-**gRPC (`grpc.ChainUnaryInterceptor` nested interceptor chain):**
-
-```
-PanicRecovery ── RequestID ── Tracing ── Metrics ── Logging ── RequireAuth ── Context ── Handler
-                                                                                              ↑
-                              ← pre-handler (left to right) ─────────────────────────────────┘
-                              ─ post-handler (right to left, after handler returns) ──────────
-```
-
-- Interceptors that record after the handler (`defer span.End()`, `logGRPCRequest`, metric observation) all execute in reverse order after the handler returns — same pattern as HTTP deferred middleware.
-- All observability signals (logs, metrics, spans) are emitted **after** the handler completes, except panic handling which fires immediately on recovery.
-
-This model ensures accurate duration measurement and full visibility into handler execution regardless of whether the handler succeeds, returns an error, or panics.
+There is no background goroutine of the library's own beyond the OTel batch span processor and, only while a stream timeout is armed, the handler goroutine.
 
 ---
 
 ## Failure domains
 
-This library isolates failures in each observability component to prevent cascading impact on request handling:
+**Consistency invariants (CONS-1..4):**
+- **CONS-1** — Every signal records the status the client received: panics as 500 (or 499 for aborts), timeouts as 503 / `DeadlineExceeded`, deliberate `c.Abort()` with its real status.
+- **CONS-2** — HTTP and gRPC classify outcomes with the same rules (`status_class`, `error_class`, client vs server codes, `DeadlineExceeded` as a client error) and log at the same levels.
+- **CONS-3** — Code and contract cannot drift: `platform_*` collectors are built from registry entries, and `make metrics-lint` fails when the generated inventory differs from the registry.
+- **CONS-4** — One identity per process: every series from every stack in a process carries the same `domain`/`service`/`environment`, and spans carry the same resource identity.
 
-| Component | Failure mode | Impact | Fallback |
-|-----------|-------------|--------|----------|
-| **Prometheus metrics** | Nil collector (metrics not initialised) | None — all recording paths (including the inner panic-recovery defer) guard against nil | Silently skipped; request proceeds normally |
-| **OTLP tracing export** | Collector unreachable at startup | None — dial failure is non-fatal | Falls back to in-process-only `TracerProvider`; spans get valid trace IDs but are not exported |
-| **Structured logging** | Nil logger passed to middleware | None — all middleware checks for nil before calling logger | `LoggingMiddleware(nil)` is a complete no-op; `PanicRecoveryMiddleware(nil)` degrades to `log.Printf` on stderr |
-| **RBAC / AuthZ** | Authorizer returns error | Handler receives `403 Forbidden` or `500 Internal Server Error` | Does not affect other middleware or routes |
-| **Panic in handler** | Any unrecovered panic | `PanicRecoveryMiddleware` intercepts, logs, records metric, and returns `500 JSON` | Does not crash the server; does not affect other in-flight requests |
-| **Context timeout** | Deadline exceeded | Downstream context-aware calls fail with `context.DeadlineExceeded` | Handler can detect and return an appropriate error; server continues serving other requests |
+**Failure invariants (FAIL-1..5):**
+- **FAIL-1** — No observability dependency can fail a request. Metrics are in-process, OTLP export is async and batched, and a nil logger degrades to no-op or stderr.
+- **FAIL-2** — Misconfiguration fails at startup, never at request time: missing or invalid identity, conflicting identity, empty `ServiceName`.
+- **FAIL-3** — Unverified or ambiguous identity fails closed: repeated identity, oversized roles and malformed headers are `401` / `Unauthenticated`, never "take the first value".
+- **FAIL-4** — Internal error detail never reaches a client. `BuildContext`, authorizer and panic details go to sanitized logs; clients get fixed messages.
+- **FAIL-5** — Metrics initialisation is all-or-nothing: a registration failure leaves nothing published and is retryable.
 
-**No external dependency** — OTLP collector, Prometheus scrape endpoint, or logger sink — can cause request handling to fail. All external I/O paths are either in-process (metrics counters), async (OTLP batched export), or nil-safe-degrading (logger).
+**Dependency degradation matrix:**
 
----
-
-## Platform contract
-
-Services that import this library must uphold the following contract. Violating these guarantees will result in broken tracing, inconsistent metrics, or incorrect identity propagation.
-
-| Requirement | Why it matters |
-|-------------|---------------|
-| **Requests always enter through a trusted API gateway** | `RequireAuth` validates header format but does not verify authenticity. A direct client bypass silently grants arbitrary identity. |
-| **All outbound HTTP calls use `PropagateHeaders`** | Without propagating `traceparent` and `x-request-id`, the distributed trace is broken at the call boundary and cross-service log correlation is impossible. |
-| **`ServiceName` is globally unique per service** | Used as a Prometheus const label (`service=...`) and OTel `service.name`. Duplicate names merge metrics from two services into one time series — impossible to alert on or separate. |
-| **`BUILD_VERSION` is set in production builds** | Recorded in `build_info{version=...}`. Without it, all releases appear as `unknown` — canary deployments and rollback tracking by version are invisible. |
-| **`HealthHandler` is registered before `ProtectedMiddlewares`** | Load balancers and k8s liveness/readiness probes do not send identity headers. A protected health route causes 401 on every probe, triggering pod restarts. |
-| **`RequirePermission` is registered after `ProtectedMiddlewares`** | `AuthZMiddleware` reads `RequestContext` from the Gin/Go context. Registering it before `ContextMiddleware` runs returns `500 Internal Server Error` instead of `403 Forbidden`. |
-| **Custom metrics register via `MetricsRegisterer()`/`MetricsConstLabels()`, called after `Observability*`/`Full*`** | Metrics init is one-time and process-wide (`sync.Once`). Calling the accessors before any `Init` has run returns `prometheus.DefaultRegisterer` and empty const labels — a custom collector registered at that point silently diverges from gincommon's own metrics (e.g. in tests using an isolated `InitWithRegisterer` registry). |
+| Dependency | Failure | Effect on requests | Signal |
+|---|---|---|---|
+| OTel collector | unreachable at startup | none | `otel_exporter_init_failed`; in-process provider keeps valid trace IDs |
+| OTel collector | export errors at runtime | none | `otel_error` via `Config.Logger` (one per export attempt) |
+| Prometheus | not scraping | none | — |
+| Custom collector | `Gather` error | none; rest of the scrape intact | `promhttp_metric_handler_errors_total`, rate-limited log |
+| Logger | nil | none | logging is a no-op; panic recovery falls back to stderr |
+| `Authorizer` | returns non-`ErrForbidden` error | that route/RPC returns `500` / `Internal` | `authz: internal error` log |
+| API gateway | bypassed | protected routes return `401` without identity; with forged identity the library cannot tell | out of scope — enforce at the network layer |
 
 ---
 
 ## Key invariants
 
 | Invariant | Where enforced |
-|-----------|---------------|
-| Empty `ServiceName` → immediate panic | `ObservabilityMiddlewares` panics before any middleware is built — prevents invalid Prometheus label cardinality |
-| Unregistered routes use `"unknown"` label | `HTTPRoute` returns the `Unknown` constant when `c.FullPath()` is empty — never the raw URL path, which would create unbounded Prometheus cardinality from scanner probes and path-parameter abuse |
-| Idempotent Prometheus registration | `metrics.Init` is guarded by `sync.Once`; use `metrics.InitWithRegisterer` for isolated test registries; `InitWithRegisterer` is protected by an internal mutex against concurrent calls |
-| Shared process-wide metrics state across `pkg/gincommon`/`pkg/grpccommon` | `MetricsRegisterer()`/`MetricsConstLabels()` reflect whichever `Config` first triggered `metrics.Init` in the process — the same "first caller wins" `sync.Once` semantics as the collectors themselves, in either public package |
-| Tracing idempotency | `EnsureInitTelemetry` checks for an existing SDK `TracerProvider` before installing a new one; prevents duplicate providers when called multiple times |
-| OTLP export fallback | If the OTLP exporter dial fails, `initTracing` falls back to an in-process-only `TracerProvider` so spans still get valid trace IDs |
-| Correct OTel RPC attributes on gRPC spans | `splitFullMethod` strips all leading slashes then uses `strings.LastIndex` to split into `rpc.service` and `rpc.method`; bare method names (no slash) return `("", method)` so `rpc.method` is always correct; empty or slash-only input returns `("", "unknown")` so `rpc.method` is never an empty Prometheus label |
-| Panic-safe responses | `PanicRecoveryMiddleware` only writes a 500 response if `!c.IsAborted()` — avoids writing a second response body when a downstream handler already started writing |
-| Panics counted in all HTTP metrics and logs | `MetricsMiddleware` and `LoggingMiddleware` both use `panicked`-sentinel defers — panicking requests increment `http_requests_total` (as 5xx) and emit an `http_request` log entry. `MetricsMiddleware` overrides code to 500 only when `panicked == true`; deliberate `c.Abort()` is recorded accurately |
-| gRPC repeated-role metadata handled | `injectRequestContext` uses `strings.Join(md.Get(MetaTenantRoles), ",")` before calling `domain.ParseRoles` — gRPC gateways that send roles as repeated metadata entries (e.g. two separate `x-tenant-roles` headers) have all entries merged and validated, matching HTTP gateway behaviour |
-| Tracing `code == 0` guard is load-bearing | In `TracingMiddleware`, `finalCode` is 0 during panic unwind (PanicRecovery hasn't fired yet). The `if code == 0` guard is marked with an explanatory comment — removing it would cause all panicking requests to produce spans with `http.response_status_code=0`, breaking 5xx trace-based alerting |
-| `pkg/gincommon.RequestContext` typed-nil safe | Returns `(nil, false)` for both absent and typed-nil `*RequestContext` values — matches the same guard in `domain.RequestContextFromGoContext` |
-| gRPC auth error precision | `checkRequiredMeta` distinguishes absent metadata (`"missing x-user-id"`) from blank/whitespace-only values (`"blank x-user-id"`) so engineers can distinguish gateway omission from gateway misconfiguration |
-| gRPC role validation parity | `parseGRPCRoles` replaced by `domain.ParseRoles` — gRPC path now applies the same `[a-zA-Z0-9_-]+` regex, `MaxRoleLen` cap, and deduplication as the HTTP path |
-| gRPC missing-metadata status code | `injectRequestContext` returns `codes.Unauthenticated` (not `codes.Internal`) when metadata is absent — client-side misconfiguration is not a server fault; `BuildContext` sentinel errors map to fixed messages with no internal detail leakage |
-| `ZapLogger.Fatal` removed | `Fatal` is absent from both `port.Logger` and the `ZapLogger` concrete type — no code path in the library can call `os.Exit(1)` through a logger, preserving deferred OTel flush and graceful shutdown |
-| Log injection prevention | `LoggingMiddleware` runs raw header values through `LogSanitizer` (control chars stripped, truncated to ≤256 bytes at a UTF-8 rune boundary) before emitting structured log fields |
-| Auth before context | `RequireAuth` runs before `ContextMiddleware`; `AuthZMiddleware` requires `ContextMiddleware` to have run — the order within `DefaultMiddlewares` enforces this |
-| Gateway trust boundary | `RequireAuth` validates format of `x-user-id` and `x-tenant-id` but does not cryptographically verify identity — the consuming service is responsible for ensuring requests cannot bypass the API gateway |
-| Nil-safe logger | Every middleware that accepts a `port.Logger` checks for `nil` before calling it — missing logger never panics; `LoggingMiddleware(nil)` is a complete no-op; `PanicRecoveryMiddleware(nil)` degrades to `log.Printf`; `Fatal` is excluded from the interface (belongs in `main()`, not middleware) |
-| Nil-safe metrics | `RecordHTTPRateLimited` and all `MetricsMiddleware` recording paths guard against nil collectors — services that skip `metrics.Init` do not panic |
-| `RequestContextFromGoContext` typed-nil safe | Returns `(nil, false)` for both absent and typed-nil pointer values — callers that check only `ok` before dereferencing cannot panic |
-| `clientIPFromContext` nil-Addr safe | gRPC context interceptor guards `p.Addr != nil` before calling `p.Addr.String()` — custom transports and `bufconn` that leave `Addr` unset do not panic |
-| gRPC logging fires on panic | `UnaryLoggingInterceptor` and `StreamLoggingInterceptor` use named returns + `defer` + panic sentinel so panicking handlers always emit a `grpc_request` log entry (as `codes.Internal`) |
-| gRPC metrics counted on panic | `UnaryMetricsInterceptor` and `StreamMetricsInterceptor` use `panicked`-sentinel defers — panicking handlers are recorded in `grpc_server_handled_total` (as `codes.Internal`) and `grpc_server_handling_seconds`, and increment `grpc_panic_total` |
-| gRPC spans record real panic value | `UnaryTracingInterceptor` and `StreamTracingInterceptor` use an inner `defer recover()+re-panic` to capture the actual panic value into `span.RecordError(fmt.Errorf("%v", panicValue))` before re-panicking so `UnaryPanicRecoveryInterceptor` still converts it to `codes.Internal` |
-| gRPC spans marked Error for all server errors | `UnaryTracingInterceptor` and `StreamTracingInterceptor` call `span.SetStatus(otelcodes.Error, err.Error())` for any non-nil handler error (not only panics) — per OTel spec `RecordError` alone does not change span status, so the explicit call is required for trace-based 5xx alerting |
-| gRPC `TraceID` populated in `RequestContext` | `injectRequestContext` reads the active OTel span via `trace.SpanFromContext(ctx).SpanContext()` after `UnaryTracingInterceptor` runs; `rc.TraceID` is the 32-hex trace ID when the span context is valid, empty string otherwise |
-| gRPC `isClientError` matches Prometheus classification | `isClientError` in logging includes `codes.DeadlineExceeded`, matching `GRPCStatusClass`/`GRPCRequestOutcome` — timed-out RPCs log at `Warn` level and are counted as client errors in metrics |
-| `duration_ms` is true float64 milliseconds | Both `LoggingMiddleware` and `logGRPCRequest` compute `duration_ms` as `float64(elapsed.Nanoseconds()) / 1e6` (not `float64(elapsed.Milliseconds())`), preserving sub-millisecond precision. `PanicRecoveryMiddleware` uses the same key and formula for a consistent log schema across panic and normal request entries |
-| Log injection prevention (panic path) | `PanicRecoveryMiddleware` applies `sanitizeLogValue` to `c.Request.URL.Path` before logging — raw URL paths containing embedded newlines cannot inject forged log lines. `UnaryPanicRecoveryInterceptor` and `StreamPanicRecoveryInterceptor` pass all log fields through `service.Sanitize` before logging, matching HTTP recovery's redaction guarantees |
-| Log sanitizer covers `key` suffix patterns without false positives | `isSensitiveLogKey` matches `k == "key"` or `strings.HasSuffix(k, "_key")` — covers `signing_key`, `enc_key`, `hmac_key` without false-positive redaction of `monkey`, `hockey`, or `key_metrics` |
-| gRPC `RequirePermission` misconfiguration returns `FailedPrecondition` | `authorizeGRPC` returns `codes.FailedPrecondition "request context missing — ensure ProtectedUnaryInterceptors ran before RequirePermission"` when no `RequestContext` is in the Go context — a diagnosable chain misconfiguration error, not a misleading `codes.Internal` |
-| `ProtoMessageSize` typed-nil safe | Uses `reflect.ValueOf(m).Kind() == reflect.Pointer && rv.IsNil()` guard — a `(*pb.Response)(nil)` passed as `any` has a non-nil interface but nil concrete pointer; without this guard `proto.Size` would panic |
-| OTel spans flushed on all demo-server exit paths | `cmd/server/main.go` calls `shutdownTracing()` explicitly before every `os.Exit(1)` (listen error, shutdown timeout, normal exit) — `os.Exit` bypasses `defer`, so the flush must be explicit rather than deferred |
-| Production-safe OTel sampling default | `AppEnv()` returns `""` (not `"dev"`) when `APP_ENV` is unset, so `OtelTraceSampleRatio` defaults to `0.1` in production deployments that omit the env var |
-| gRPC `ServiceName` panic guard | `ObservabilityUnaryInterceptors`, `ObservabilityStreamInterceptors`, and all `Full*` constructors panic on empty `ServiceName` — same guarantee as the HTTP stack |
-| gRPC auth ordering | `ProtectedUnaryInterceptors` / `ProtectedStreamInterceptors` always place `RequireAuth` before `ContextInterceptor`; `AuthZInterceptor` requires `ContextInterceptor` to have run |
-| `ClientIP` in `RequestContext` | HTTP: set from `c.ClientIP()` (Gin respects `TrustedProxies`). gRPC: set from `peer.FromContext` if `Addr` is non-nil; empty string otherwise |
-| `TimeoutMiddleware` is a no-op for zero/negative durations | Insert unconditionally and set `timeout=0` to disable without restructuring the router |
+|---|---|
+| Route labels never use the raw path | `label.HTTPRoute`: Gin template or `unknown` |
+| gRPC method labels and span names are bounded | `label.GRPCMethod`: pattern, 256-byte cap, `RegisterKnownMethods` allow-list |
+| HTTP method label is bounded | `metrics.HTTPMethodLabel` (non-standard → `OTHER`); spans use `_OTHER` + truncated `http.request.method_original` |
+| `X-Trace-ID` reaches the client on every response | `CorrelationHeadersMiddleware` sets it before `c.Next()`; tests assert on `w.Result().Header` |
+| Health probes need no identity, and nothing else bypasses auth | exact match of `/grpc.health.v1.Health/{Check,Watch,List}` in auth, context and authz interceptors |
+| Repeated identity is rejected on both stacks | `identity.go` (HTTP), `checkSingleIdentityMeta` (gRPC) |
+| Roles are bounded on both stacks | `domain.ParseRolesStrict`: 4096 bytes, 64 roles, token regex, dedupe |
+| Unverified identity never lands in verified log fields | `addIdentityLogFields`: `claimed_*` unless a `RequestContext` was built |
+| `PropagateHeaders` never forwards identity | identity only via `PropagateIdentityHeaders` / `*ClientIdentityInterceptor`; values set, not appended |
+| A panic is counted once in every signal | `panicked` sentinels in metrics/logging/tracing; recovery only at the outermost layer |
+| `http.ErrAbortHandler` is never a panic or a 5xx | recognised in all four layers; re-panicked as the bare sentinel |
+| Panic after a partial write never looks like a complete 200 | recovery re-panics `http.ErrAbortHandler` when `c.Writer.Written()` |
+| Timeouts are recorded as the client saw them | HTTP timeout innermost; gRPC timeout interceptors appended last |
+| Context errors are classified like grpc-go | `grpcStatus`: `FromError`, else `FromContextError` |
+| One metrics identity per process | `InitWithOptions` + `mismatch` → `ErrIdentityMismatch`; `test/unit/identity` pins it through the public constructors |
+| Metrics init is retryable | `registerAll` + rollback; publish only on success |
+| Recording never races with init | atomic collector set |
+| Tracers captured before any provider swap keep exporting | delegating global provider |
+| No library path calls `os.Exit` | `Fatal` absent from `port.Logger` and `ZapLogger` |
+| Log values cannot inject lines | `LogSanitizer`: control chars stripped, 256-byte cap at a UTF-8 boundary; sensitive keys redacted (`*_key`, `password`, `secret`, `token`, `credential`, `session`, ...) |
+| `duration_ms` is sub-millisecond precise | `float64(elapsed.Nanoseconds()) / 1e6` in every request and panic log |
+| Typed-nil safety | `RequestContext(c)`, `RequestContextFromGoContext`, `ProtoMessageSize` guard typed-nil pointers |
+| Consumers never import `internal/` | `pkg/*/types.go` aliases; `consumer_api_test.go` |
+
+---
+
+## Release and distribution
+
+### Nothing is deployed
+
+| Artefact | Built by | Consumed by |
+|---|---|---|
+| Go module version (`vX.Y.Z` tag) | `release.yml` | every consuming service via `go get` |
+| `metricslint` binaries (linux/darwin amd64+arm64, windows amd64) + `.sha256` + `checksums.txt` | `prepare-release-binary.sh` | non-Go CI pipelines |
+| Demo image (semver tags, no `latest`) | `release.yml` / `ci.yml` `push` | CI smoke gate only |
+
+Two-stage `Dockerfile`: digest-pinned `golang:1.26.6-alpine` builder, digest-pinned `alpine:3.21` runtime running as `nobody`, `HEALTHCHECK` on `/health`. Pins are checked against `.docker-digests` in CI. `alpine:3.21` reaches end of support around November 2026.
+
+### Versioning
+
+SemVer over `pkg/*` ([VERSIONING.md](VERSIONING.md)). `v1.4.0` is a recorded exception (breaking changes in a MINOR). A release requires a `## [X.Y.Z]` CHANGELOG section and a tag that points at HEAD and is reachable from `origin/main`.
+
+---
+
+## Testing strategy
+
+- **Unit** (`test/unit/`, no Docker). One package per area: `middleware`, `grpc`, `gincommon`, `metrics`, `platformmetrics` (gincommon's own metrics validate against the registry), `obsregistry` (registry parsing, validation rules, `refs`, CLI exit codes, OpenMetrics input), `otel` (delegating provider: `TestReplacement_EarlierTracerExportsToNewProvider`, `TestReplacement_ConcurrentStartsRace`, `TestShutdown_CapturedProviderLiveAfterReinit`, `TestEnsureInitTelemetry_KeepsForeignSDKProvider`), `config`, `logger`, `domain`, `service`, `label`, `server`, `metricshandler`.
+- **Identity** (`test/unit/identity`, `test/unit/uninit`). These deliberately avoid `test/testenv`, which relaxes the identity rule for every other package. `TestOneIdentityPerProcess` drives the real panic through `gincommon.ObservabilityMiddlewares` and `grpccommon.FullUnaryInterceptors`. `TestUnknownFirstThenRealVersionUpgrades` covers the order-independent version rule.
+- **Consumer API** (`test/unit/gincommon/consumer_api_test.go`). `TestConsumerAuthorizer_Gin` / `_GRPC` implement `Authorizer` with `pkg/` imports only.
+- **Integration** (`test/integration/`, in-process). The HTTP chain end to end (`TestMiddlewareFlow*`, `TestObservabilityMiddlewares_ErrAbortHandler_FullChain`, `TestProtectedMiddlewares_RepeatedIdentityHeader401`, `TestTimeoutMiddleware_KeepsStatusOnlyResponse`), plus a real bufconn gRPC server in `grpc_server_test.go`: `TestGRPC_UnauthenticatedCallIsLoggedAtWarn`, `TestGRPC_AmbiguousIdentityRejected`, `TestGRPC_RequestIDEchoedAndPropagatedDownstream`, `TestGRPC_HealthBypassesAuth`, `TestGRPC_HealthPrefixNearMissRequiresAuth`, `TestGRPC_UnknownMethodBoundedLabel`, `TestGRPC_StreamTimeoutEndsIdleRecvLoop`, `TestGRPC_StreamTimeoutInnermost_MetricsMatchClient`.
+- **E2E** (`test/e2e/`). Full demo-server startup.
+- **Smoke** (`test/smoke/`, plus CI's `smoke-tests.sh` image gate). The image is at most 60 MB; an invalid `OBSERVABILITY_DOMAIN` must exit non-zero with the registry error; `/health` and `/metrics` must be served with identity labels.
+
+Tests live in `test/`, a separate package tree, so coverage is measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...`. The CI gate is **≥ 98%** (`coverage-gate.sh`), and the current total is **99.0%**. The gRPC (`test/unit/grpc`, `TestGRPC_*`) and tracing (`test/unit/otel`, `test/unit/gincommon`) suites pass repeated runs under `-race -count=20`.
+
+---
+
+## Consumer conformance checklist
+
+Before a service ships on `v1.4.0`, verify:
+
+**Identity and configuration**
+- [ ] `Config.Domain` (or `OBSERVABILITY_DOMAIN`) is a registry domain; `Environment` / `APP_ENV` is one of `local|dev|test|staging|prod`.
+- [ ] Every stack in the process (HTTP and gRPC) uses the same `ServiceName`, `Domain` and `Environment`.
+- [ ] `BUILD_VERSION` is a clean value (semver, `git describe`, short SHA), or the sanitisation warning is accepted.
+
+**Trust boundary**
+- [ ] The gateway strips client identity headers and **replaces** (never appends) `x-user-id`, `x-tenant-id`, `x-tenant-roles`.
+- [ ] The service is not reachable around the gateway.
+- [ ] Calls to other IAM services that need identity use `PropagateIdentityHeaders` / `UnaryClientIdentityInterceptor`; every other outbound call uses `PropagateHeaders` / `UnaryClientInterceptor`.
+
+**Chain order**
+- [ ] `/health` and `/metrics` are registered before `ProtectedMiddlewares`; gRPC health uses `RegisterHealth`.
+- [ ] `RequirePermission*` is after the protected chain.
+- [ ] HTTP uses `Config.RequestTimeout`, not an outermost `TimeoutMiddleware`; gRPC timeout interceptors are appended after `Full*`.
+- [ ] gRPC servers call `RegisterKnownMethods(srv)` after all services are registered.
+
+**Authorization and metrics**
+- [ ] The production `Authorizer` returns `ErrForbidden` for denials and honours `ctx`.
+- [ ] Tier 3 metrics are named `<domain>_<service>_*` and built after the stack constructor; shared metrics are registry entries built with `NewShared*Vec`.
+- [ ] The service's CI runs `obsregistry.Validate(gincommon.MetricsGatherer(), ...)` in a test and `metricslint refs` over its dashboards and rules.
+
+**Operations**
+- [ ] Edge services set `OTEL_TRACES_IGNORE_REMOTE_PARENT_SAMPLED=true`, or the gateway re-issues `traceparent`.
+- [ ] `gincommon.Shutdown(log)` / `grpccommon.Shutdown(log)` runs after the server stops.
+- [ ] Dashboards and log queries use `platform_*` names and the `claimed_*` fields.
+
+---
+
+## Registry lifecycle
+
+| Step | Where | Gate |
+|---|---|---|
+| Propose a shared metric | add the entry to `registry.json` with `"status": "proposed"`, `owner`, labels, help, buckets | `make metrics-lint` (strict `Parse`, registry self-check) |
+| Regenerate inventory | `make metrics-inventory` → `docs/observability/metric-registry.md` | inventory drift check in `make metrics-lint` and the pre-commit hook |
+| Ratify | observability governance flips `proposed` → `approved` | until then `metricslint check -strict` fails on it unless `-allow-proposed-owner` lists the owner |
+| Retire | status `removed` with `replacements` — the entry stays | `metricslint` reports emitting or querying it as an error naming the replacement |
+| Import a sibling registry | platform-events / platform-pgcommon releases, verbatim; their contract wins on conflict | registry self-check |
+| Mirror | re-copy `registry.json` into platform-fastapicommon | manual — on every change |
+
+Today 48 entries are `proposed`, including all 16 gincommon-owned `platform_*` metrics and the four `iam_*` Tier 2 metrics (the only ownerless ones). `-allow-proposed-owner platform-gincommon,platform-events,platform-pgcommon` is the documented strict-mode workaround until ratification.
+
+---
+
+## Threat model
+
+STRIDE analysis of `platform-gincommon` as embedded in a consuming service. Every row maps to a real mechanism in this repo.
+
+| STRIDE | Threat | Component | Mitigation |
+|---|---|---|---|
+| **Spoofing** | A client sends its own `x-user-id`/`x-tenant-id` | `RequireAuth` | The gateway strips and replaces identity headers (trust boundary). The library cannot verify identity, so the network layer must make the service unreachable around the gateway |
+| **Spoofing** | A gateway that **appends** headers lets a client value sit first | `identity.go`, `checkSingleIdentityMeta` | Repeated identity is rejected on both stacks (`401` / `Unauthenticated`), never first-value-wins |
+| **Spoofing** | A path under the health prefix bypasses auth via `UnknownServiceHandler` | gRPC auth/context/authz | Exact match on `Check`/`Watch`/`List`; `TestGRPC_HealthPrefixNearMissRequiresAuth` sends near-miss paths over a real connection |
+| **Tampering** | Crafted header values inject fake log lines | `LoggingMiddleware`, recovery, `LogSanitizer` | Control characters stripped, 256-byte cap, U+2028/2029 rejected in identity headers |
+| **Repudiation** | Rejected requests leave no trace | `RequireAuth`, `ContextMiddleware`, gRPC logging order | Every 401 / `Unauthenticated` writes a warn audit entry with request and trace IDs; gRPC logging wraps auth |
+| **Repudiation** | Spoofed identity appears as verified in audit logs | `addIdentityLogFields` | Unverified values only in `claimed_*` fields |
+| **Information disclosure** | Identity headers leak to a third-party API | `PropagateHeaders` | Identity forwarding is opt-in (`PropagateIdentityHeaders`, `*ClientIdentityInterceptor`) |
+| **Information disclosure** | Internal errors or panic values reach the client | recovery, authz, context | Fixed client messages; detail only in sanitized logs and spans |
+| **Information disclosure** | Secrets in log fields | `service.Sanitize` | Sensitive keys redacted (`*_key`, `password`, `secret`, `token`, `credential`, `session`, ...) |
+| **Denial of service** | Scanner probes or random gRPC methods explode metric cardinality | `label` | Route templates / `unknown`; gRPC pattern, 256-byte cap, allow-list; bounded HTTP methods |
+| **Denial of service** | A 1 MB `x-tenant-roles` header is parsed, logged and re-sent | `ParseRolesStrict` | 4096-byte / 64-role cap → 401 |
+| **Denial of service** | A 429 storm floods the logs | `MetricsMiddleware` | Warn log sampled to one per route per second, with a `suppressed` count; the counter still counts every 429 |
+| **Denial of service** | External callers force 100% trace sampling | `Sampler` | `ParentBased`; `IgnoreRemoteParentSampled` re-samples remote-sampled parents at the ratio |
+| **Denial of service** | A blocked stream handler holds a connection past its deadline | `TimeoutStreamInterceptor` | Handler goroutine is abandoned at the cap; the stream is torn down |
+| **Elevation of privilege** | A misordered chain lets `RequirePermission` run without identity | authz | No `RequestContext` → `500` / `FailedPrecondition`, never allow |
+| **Elevation of privilege** | Demo RBAC used in production | `NewDemoRBAC` | Documented reference-only; default-deny for every action except `read`, and `delete` requires `admin` |
+
+**Out of scope (platform controls):** JWT/OAuth validation and MFA (gateway, Keycloak); network isolation of services (mesh, NetworkPolicy); TLS termination; the security of the collector, Prometheus and Loki in production.
+
+---
+
+## Developer tools
+
+| Tool | Command | Purpose |
+|---|---|---|
+| `metricslint check` | `go run ./cmd/metricslint check -url http://localhost:8080/metrics` | Validate a live scrape (`-strict`, `-allow-proposed-owner`) or exposition files (text or OpenMetrics) |
+| `metricslint refs` | `go run ./cmd/metricslint refs <dirs>` | Legacy and unregistered names in dashboards, alert/recording rules, SLOs, HPA manifests |
+| `metricslint registry` / `inventory` | `make metrics-lint` / `make metrics-inventory` | Registry self-check; regenerate `metric-registry.md` |
+| pkgsite | `make godoc` → http://localhost:8080 | Browse the public API |
+| Local stack | `make docker-up` | Collector → Tempo, Prometheus (reference rules), Loki + Promtail, Grafana |
+| Demo server | `make run` | `/health`, `/metrics`, `/panic` (dev only) |
+
+---
+
+## Session-specific decisions
+
+Judgment calls made during the v1.4.0 hardening passes, each documented at its point of impact in the code as well:
+
+1. **Breaking changes as a MINOR.** Removing the pre-standard metric names, requiring `Domain`, and changing `Authorizer`, `PropagateHeaders` and the gRPC chain order would normally need `v2.0.0` with a `/v2` module path. No consumer had been deployed and all eleven IAM services upgrade in lockstep, so `v1.4.0` ships them as a [recorded exception](VERSIONING.md#recorded-exceptions) rather than churning every import path.
+2. **A delegating global tracer provider instead of replacing the global.** Replacing a provisional provider used to shut it down, while tracers captured earlier (pgcommon's `Config.Tracer`, package-level `otel.Tracer`) kept pointing at it and silently dropped spans. Swapping an inner pointer behind one long-lived provider fixes every capture point at once. `Shutdown` keeps that provider installed for the same reason.
+3. **Transactional, identity-checked metrics init instead of `sync.Once`.** First-caller-wins hid configuration conflicts and left half-registered collectors after a registration failure. The replacement fails loudly on a conflicting identity, rolls back on failure, and publishes atomically.
+4. **Order-independent `unknown` version and sanitised versions.** The first identity rule made startup depend on whether the gRPC or the HTTP stack was built first, and branch-style `BUILD_VERSION` values crashed services over a cosmetic label. A real version now upgrades `unknown` in either order, and invalid versions are sanitised with a warning.
+5. **Timeouts innermost on both stacks.** An outermost timeout let metrics and logs record 200 or `OK` while the client received 503 or `DeadlineExceeded`. Moving the timeout inside observability makes the recorded and delivered status identical. The gRPC stream variant runs the handler in a goroutine because a handler blocked in `RecvMsg` cannot otherwise be bounded.
+6. **Exact-match health exemption.** A prefix match on `/grpc.health.v1.Health/` was an authentication bypass behind `UnknownServiceHandler`. Only the three standard methods are exempt.
+7. **`http.ErrAbortHandler` as a client abort.** Reverse-proxy client disconnects were counted as panics and 5xx and paged on-call. They are now 499 / `client_error` at Debug level, re-panicked as the bare sentinel because net/http compares by identity. A real panic after a partial write aborts the connection so the client sees truncation.
+8. **Identity forwarding is opt-in.** `PropagateHeaders` sent user, tenant and roles to any destination, including third-party APIs. It now sends trace context and request ID only, and identity goes through explicit `*Identity*` helpers.
+9. **gRPC logging wraps auth.** Logging used to be innermost in the `Full` chain, so auth rejections were never logged. Moving it outward needed an identity holder in the context so authenticated calls still log verified `user_id` / `tenant_id`.
+10. **`RequestContextData` in both packages.** One name for one type, chosen before release because `gincommon.RequestContext` was already the accessor function.
+11. **Test-only identity relaxation.** `test/testenv` enables `AllowIdentityChangeForTesting` so dozens of test packages can build stacks with different service names. The real mismatch panic is pinned in packages that deliberately do not import `testenv`.
+
+---
+
+## Documentation assets
+
+Architecture diagrams live as standalone Mermaid files under `docs/architecture/mermaid/` and are embedded into this document verbatim, each under a `> Source:` link back to its `.mmd` file, so a diagram only has to be correct in one place. Keep both in sync when either changes.
+
+> Source: [`docs/architecture/mermaid/documentation-assets.mmd`](docs/architecture/mermaid/documentation-assets.mmd)
+
+```mermaid
+graph LR
+    subgraph sources["Documentation sources"]
+        mmd["docs/architecture/mermaid/<br/>15 × .mmd source diagrams"]
+        arch["ARCHITECTURE.md<br/>embeds every .mmd verbatim + prose"]
+        readme["README.md<br/>mental model · API overview · integration · operations"]
+        obsdocs["docs/observability/<br/>standard · metric-registry.md (generated) · migration · runbooks"]
+        godoc["pkg/gincommon/doc.go + exported symbol comments<br/>(revive linter)"]
+        claude[".claude/CLAUDE.md<br/>design decisions and invariants"]
+        policy["VERSIONING.md · CHANGELOG.md · SECURITY.md · CONTRIBUTING.md"]
+    end
+
+    subgraph rendered["Rendered / consumed by"]
+        github["GitHub — Markdown + Mermaid"]
+        ide["IDE Mermaid preview · go doc"]
+        live["mermaid.live"]
+        pkgsite["make godoc → pkgsite :8080"]
+        claude_ai["Claude Code"]
+        lint["make metrics-lint — inventory drift gate"]
+    end
+
+    mmd -->|"embedded as fenced blocks"| arch
+    arch --> github
+    mmd --> ide
+    mmd --> live
+    readme --> github
+    obsdocs --> github
+    obsdocs --> lint
+    godoc --> pkgsite
+    godoc --> ide
+    claude --> claude_ai
+    policy --> github
+```
+
+| Document | Description |
+|---|---|
+| [README.md](README.md) | Mental model, API overview, integration guide, local development, operations |
+| [`docs/lld/platform-gincommon-lld.md`](docs/lld/platform-gincommon-lld.md) | Low-level design: public API contract, validation limits, init algorithms, error taxonomy, open-questions register |
+| [`docs/architecture/README.md`](docs/architecture/README.md) | Index of the 15 `.mmd` diagrams embedded above |
+| [`docs/observability/README.md`](docs/observability/README.md) | The observability standard as implemented, CI enforcement, strict mode |
+| [`docs/observability/metric-registry.md`](docs/observability/metric-registry.md) | Generated registry inventory |
+| [`docs/observability/migration.md`](docs/observability/migration.md) | Legacy → `platform_*` name mapping |
+| [`docs/observability/runbooks.md`](docs/observability/runbooks.md) | Alert runbooks |
+| [`.claude/CLAUDE.md`](.claude/CLAUDE.md) | Design decisions and invariants for Claude Code |
+| [VERSIONING.md](VERSIONING.md) · [CHANGELOG.md](CHANGELOG.md) · [SECURITY.md](SECURITY.md) · [CONTRIBUTING.md](CONTRIBUTING.md) | Release policy, history, vulnerability reporting, contribution guide |
+
+Render a diagram locally in a Mermaid-aware IDE (VS Code + Mermaid Preview, IntelliJ + Mermaid plugin), or paste it into [mermaid.live](https://mermaid.live).

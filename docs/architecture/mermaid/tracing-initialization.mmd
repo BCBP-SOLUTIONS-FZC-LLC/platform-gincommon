@@ -1,30 +1,35 @@
 flowchart TD
-    A([Tracing initializer called]) --> B{Which function?}
+    A(["Tracing entry point"]) --> B{"Which one?"}
 
-    B -- InitTracingFromEnv --> C[read OTEL_SERVICE_NAME\nBUILD_VERSION\nOTEL_EXPORTER_OTLP_ENDPOINT]
-    C --> D[call InitTracing]
+    B -- "InitTracingWithConfig(TracingConfig)" --> V{"ServiceName empty?"}
+    V -- yes --> VE(["ErrServiceNameRequired"])
+    V -- no --> INIT
+    B -- "InitTracing / InitTracingFromEnv<br/>(OTEL_SERVICE_NAME → APP_NAME, no library default)" --> P{"service name empty?"}
+    P -- yes --> PROV["stderr warning<br/>provisional = true, service.name = unknown_service"]
+    P -- no --> INIT
+    PROV --> INIT
+    B -- "EnsureTracing / ensureInitTelemetry<br/>(ObservabilityMiddlewares, gRPC constructors)" --> E{"current global provider?"}
+    E -- "ours, active and non-provisional<br/>(or this call is provisional too)" --> KEEP(["keep it — upgrade the error logger if it had none"])
+    E -- "a consumer's own *sdktrace.TracerProvider" --> KEEP
+    E -- "ours with a provisional provider,<br/>none yet, or ours after Shutdown" --> INIT
 
-    B -- InitTracing --> E[build TelemetryConfig\nfrom env defaults]
-    E --> F[call InitTelemetry]
+    INIT["install under shutdownMu"] --> R["initTracing:<br/>installErrorHandler → otel_error to Config.Logger, else stderr<br/>Resource = SDK defaults + service.name, service.version,<br/>service.namespace (domain), deployment.environment.name"]
+    R --> S["Sampler = ParentBased(root)<br/>root: AlwaysSample ≥ 1 · NeverSample ≤ 0 · TraceIDRatioBased<br/>IgnoreRemoteParentSampled → WithRemoteParentSampled(root)"]
+    S --> X{"Endpoint set?"}
+    X -- no --> NOEXP["exporter disabled — spans in-process only"]
+    X -- yes --> EXP{"otlptracegrpc.New ok?"}
+    EXP -- no --> FAIL["warn otel_exporter_init_failed<br/>in-process provider — valid trace IDs, nothing exported"]
+    EXP -- yes --> BATCH["WithBatcher(exporter)"]
+    NOEXP --> TP
+    FAIL --> TP
+    BATCH --> TP
+    TP["new *sdktrace.TracerProvider<br/>propagator: TraceContext (+ Baggage when enabled)<br/>info otel_tracing_initialized (effective config, once)"]
+    TP --> SWAP["global.inner.Store(tp) — atomic swap<br/>otel.SetTracerProvider(global) only if not already installed"]
+    SWAP --> OLD(["after unlocking: old provider ForceFlush + Shutdown (5s budget)<br/>return shutdown func"])
 
-    B -- EnsureTracing --> G{Is global provider\nan SDK TracerProvider?}
-    G -- yes, already initialised --> Z([no-op — return])
-    G -- no --> F
+    subgraph deleg["Delegating global provider (provider.go)"]
+        D1["Tracer(name) → delegatingTracer"] --> D2["every Start: load current inner provider<br/>cache SDK tracer per provider generation"]
+        D2 --> D3["no inner provider (before init / after Shutdown) → no-op span<br/>that keeps the parent span context"]
+    end
 
-    B -- EnsureInitTelemetry\nvia ObservabilityMiddlewares --> G
-
-    F --> H[shutdownMu.Lock\ncall previous shutdown if set]
-    H --> I[initTracing:\nbuild OTel Resource\nservice.name + service.version]
-    I --> J{Endpoint non-empty?}
-    J -- yes --> K[dial OTLP/gRPC exporter\nwith optional InsecureOption]
-    K -- success --> L[TracerProvider\nwith Batcher + Resource + Sampler]
-    K -- failure --> M[TracerProvider\nin-process only\nno OTLP export]
-    J -- no --> M
-    L --> N[SetTracerProvider global]
-    M --> N
-    N --> O{EnableBaggage?}
-    O -- yes --> P[propagators: TraceContext + Baggage]
-    O -- no  --> Q[propagator: TraceContext only]
-    P --> R[SetTextMapPropagator composite]
-    Q --> R
-    R --> S([return shutdown func\n5-second flush on tp.Shutdown])
+    SD(["Shutdown()"]) --> SD1["inner = nil, flush + shut down the active provider<br/>global provider STAYS installed — tracers captured now<br/>come back to life after the next init"]

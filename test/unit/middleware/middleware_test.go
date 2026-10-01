@@ -18,6 +18,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
 	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
@@ -25,13 +28,11 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type errAuthorizer struct{}
 
-func (errAuthorizer) Authorize(string, []string, string, string) error {
+func (errAuthorizer) Authorize(context.Context, *domain.RequestContext, string, string) error {
 	return errors.New("authorize failed")
 }
 
@@ -39,7 +40,7 @@ func TestRequireAuth_Unauthorized(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	r := gin.New()
-	r.Use(middleware.RequireAuth())
+	r.Use(middleware.RequireAuth(nil))
 	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -98,7 +99,7 @@ func TestLoggingMiddleware_LogsRequestFields(t *testing.T) {
 	if log.Msg != "http_request" {
 		t.Fatalf("msg = %q", log.Msg)
 	}
-	if log.Fields["tenant_id"] != "tenant-1" || log.Fields["user_id"] != "user-1" {
+	if log.Fields["claimed_tenant_id"] != "tenant-1" || log.Fields["claimed_user_id"] != "user-1" || log.Fields["user_id"] != nil {
 		t.Fatalf("fields = %v", log.Fields)
 	}
 	if log.Fields["path"] != "/log" {
@@ -121,7 +122,7 @@ func TestLoggingMiddleware_LogsRequestFields(t *testing.T) {
 
 func TestPanicRecoveryMiddleware_RecordsPanicAndReturns500(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-panic", "test")
+	fixtures.InitMetrics("svc-panic", "test")
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()
@@ -144,7 +145,7 @@ func TestPanicRecoveryMiddleware_RecordsPanicAndReturns500(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body["error"] != "Internal Server Error" {
+	if body["error"] != "internal server error" {
 		t.Fatalf("error = %v", body["error"])
 	}
 	if status, ok := body["status"].(float64); !ok || int(status) != http.StatusInternalServerError {
@@ -153,7 +154,7 @@ func TestPanicRecoveryMiddleware_RecordsPanicAndReturns500(t *testing.T) {
 	if body["request_id"] == "" || body["request_id"] == nil {
 		t.Fatalf("request_id = %v, want non-empty", body["request_id"])
 	}
-	if w.Header().Get("X-Request-Id") == "" {
+	if w.Result().Header.Get("X-Request-Id") == "" {
 		t.Fatal("expected X-Request-Id response header")
 	}
 	if log.Level != "error" || log.Msg != "panic recovered" {
@@ -189,7 +190,7 @@ func TestPanicRecoveryMiddleware_NilLogger_ReturnsJSON500(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
-	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+	if ct := w.Result().Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Fatalf("Content-Type = %q, want JSON", ct)
 	}
 }
@@ -213,8 +214,8 @@ func TestPanicRecoveryMiddleware_CorrelationHeadersMatchBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.RequestID != w.Header().Get("X-Request-Id") {
-		t.Fatalf("body request_id %q != header %q", body.RequestID, w.Header().Get("X-Request-Id"))
+	if body.RequestID != w.Result().Header.Get("X-Request-Id") {
+		t.Fatalf("body request_id %q != header %q", body.RequestID, w.Result().Header.Get("X-Request-Id"))
 	}
 	if body.Status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", body.Status, http.StatusInternalServerError)
@@ -250,8 +251,8 @@ func TestPanicRecoveryMiddleware_WithTracing_IncludesTraceIDInResponseAndLog(t *
 	if !isValidOtelTraceID(body.TraceID) {
 		t.Fatalf("trace_id = %q, want valid non-zero OTel ID", body.TraceID)
 	}
-	if body.TraceID != w.Header().Get("X-Trace-Id") {
-		t.Fatalf("body trace_id %q != header %q", body.TraceID, w.Header().Get("X-Trace-Id"))
+	if body.TraceID != w.Result().Header.Get("X-Trace-Id") {
+		t.Fatalf("body trace_id %q != header %q", body.TraceID, w.Result().Header.Get("X-Trace-Id"))
 	}
 	if log.Fields["trace_id"] != body.TraceID {
 		t.Fatalf("log trace_id = %v, want %q", log.Fields["trace_id"], body.TraceID)
@@ -351,7 +352,7 @@ func TestTracingMiddleware_SetsSpanAttributesOnPanic(t *testing.T) {
 
 func TestMetricsMiddleware_RecordsRateLimitedOn429(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-rl", "test")
+	fixtures.InitMetrics("svc-rl", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -378,7 +379,7 @@ func TestMetricsMiddleware_RecordsRateLimitedOn429(t *testing.T) {
 
 func TestMetricsMiddleware_KnownRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-metrics", "test")
+	fixtures.InitMetrics("svc-metrics", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -395,7 +396,7 @@ func TestMetricsMiddleware_KnownRoute(t *testing.T) {
 
 func TestMetricsMiddleware_RecordsPayloadSizes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-size", "test")
+	fixtures.InitMetrics("svc-size", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -418,7 +419,7 @@ func TestMetricsMiddleware_RecordsPayloadSizes(t *testing.T) {
 
 func TestMetricsMiddleware_NoBodyResponseSizeNonNegative(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-nobody", "test")
+	fixtures.InitMetrics("svc-nobody", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -463,7 +464,7 @@ func TestMetricsMiddleware_NilSafe_WithoutInit(t *testing.T) {
 
 func TestMetricsMiddleware_UnknownRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	metrics.Init("svc-unknown", "test")
+	fixtures.InitMetrics("svc-unknown", "test")
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -576,8 +577,8 @@ func authzTestRouter(t *testing.T, auth port.Authorizer, action, resource, metho
 	t.Helper()
 	r := gin.New()
 	r.Use(
-		middleware.RequireAuth(),
-		middleware.ContextMiddleware(service.NewContextService()),
+		middleware.RequireAuth(nil),
+		middleware.ContextMiddleware(service.NewContextService(), nil),
 		middleware.AuthZMiddleware(auth, action, resource, nil),
 	)
 	r.Handle(method, path, handler)
@@ -657,8 +658,8 @@ func TestRequestIDMiddleware_PropagatesHeader(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Header().Get("x-request-id") != "rid-123" {
-		t.Fatalf("header = %q", w.Header().Get("x-request-id"))
+	if w.Result().Header.Get("x-request-id") != "rid-123" {
+		t.Fatalf("header = %q", w.Result().Header.Get("x-request-id"))
 	}
 }
 
@@ -890,7 +891,7 @@ func TestMetricsMiddleware_AbortWithNoStatus_NotRecordedAs5xx(t *testing.T) {
 	// inflating error budgets. After the fix only panics use code=500.
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-abort-test", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-abort-test", "test", reg)
 
 	r := gin.New()
 	r.Use(middleware.MetricsMiddleware(nil))
@@ -922,7 +923,7 @@ func TestMetricsMiddleware_Panic_RecordedAs5xx(t *testing.T) {
 	// Confirms panicking handlers are counted in http_requests_total as 5xx.
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-panic-test", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-panic-test", "test", reg)
 
 	r := gin.New()
 	r.Use(
@@ -1011,7 +1012,7 @@ func TestAuthZMiddleware_NilAuth_Returns500(t *testing.T) {
 func TestMetricsMiddleware_429_WithLogger_LogsWarn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-429-logger", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-429-logger", "test", reg)
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()
@@ -1087,7 +1088,7 @@ func TestAuthZMiddleware_ContextWrongType_WithLogger(t *testing.T) {
 func TestLoggingMiddleware_PanicEmitsErrorLog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-log-panic", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-log-panic", "test", reg)
 
 	log := &fixtures.MockLogger{}
 	r := gin.New()
@@ -1131,9 +1132,9 @@ func TestSanitizeLogValue_StripsControlChars(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	uid, ok := log.Fields["user_id"]
+	uid, ok := log.Fields["claimed_user_id"]
 	if !ok {
-		t.Fatal("expected user_id field in log")
+		t.Fatal("expected claimed_user_id field in log")
 	}
 	s, _ := uid.(string)
 	if strings.Contains(s, "\n") {

@@ -1,46 +1,47 @@
 graph LR
-    subgraph req["Per-request (HTTP)"]
-        pr["PanicRecoveryMiddleware\n· defer recover()\n· log panic + stack trace\n· record OTel error on span\n· emit http_panic_total metric\n· return 500 JSON"]
-        ri["RequestIDMiddleware\n· read x-request-id or generate UUID\n· store in Gin context\n· echo X-Request-ID header"]
-        tr["TracingMiddleware\n· extract W3C traceparent\n· start OTel HTTP span\n· set span attributes (method, route, status)\n· echo X-Trace-ID header"]
-        ch["CorrelationHeadersMiddleware\n· propagate trace + request headers\n· downstream calls inherit context"]
-        me["MetricsMiddleware\n· increment http_active_requests\n· defer: observe duration, sizes, status class\n· log WARN on 429"]
-        lo["LoggingMiddleware\n· defer: structured http_request log\n· sanitizes raw header values\n(control chars stripped, ≤256 bytes)"]
+    subgraph req["Per request — ObservabilityMiddlewares / Observability*Interceptors"]
+        pr["PanicRecovery<br/>· outermost defer recover()<br/>· log sanitized panic + stack<br/>· 500 JSON / codes.Internal<br/>· ErrAbortHandler → abort quietly"]
+        ri["RequestID<br/>· reuse valid x-request-id or UUID<br/>· X-Request-ID header / grpc.SetHeader"]
+        tr["Tracing<br/>· extract traceparent (ParentBased)<br/>· server span, bounded name<br/>· panic + error status"]
+        ch["CorrelationHeaders (HTTP)<br/>· X-Trace-ID, X-Request-ID before the handler"]
+        me["Metrics<br/>· active / inflight gauge<br/>· defer: counter, duration, sizes<br/>· 429 counted, warn sampled 1/route/s"]
+        lo["Logging<br/>· defer: http_request / grpc_request<br/>· sanitized headers, verified vs claimed identity"]
     end
 
-    subgraph prom["Prometheus metrics (HTTP)"]
-        p1["http_requests_total\nlabels: method · route · status_class · error_class"]
-        p2["http_request_duration_seconds\nlabels: method · route · status_class · error_class"]
-        p3["http_request_size_bytes"]
-        p4["http_response_size_bytes"]
-        p5["http_active_requests\nlabels: route"]
-        p6["http_panic_total\nlabels: method · route"]
-        p7["rate_limited_requests_total\nlabels: method · route"]
-        p8["build_info (gauge=1)\nconst: service · version"]
-    end
-
-    subgraph grpc_m["Prometheus metrics (gRPC)"]
-        g1["grpc_server_handled_total\nlabels: method · grpc_code · status_class · error_class"]
-        g2["grpc_server_handling_seconds\nlabels: method · status_class · error_class"]
-        g3["grpc_server_request_size_bytes"]
-        g4["grpc_server_response_size_bytes"]
-        g5["grpc_server_inflight_requests\nlabels: method"]
-        g6["grpc_rate_limited_requests_total\nlabels: method"]
-        g7["grpc_panic_total\nlabels: method"]
+    subgraph prom["Prometheus — MetricsHandler() (ContinueOnError)"]
+        p_http["platform_http_requests_total · _request_duration_seconds<br/>_request_size_bytes · _response_size_bytes · _active_requests<br/>_panics_total · _rate_limited_requests_total · _request_timeouts_total"]
+        p_grpc["platform_grpc_server_handled_total · _handling_seconds<br/>_request_size_bytes · _response_size_bytes · _inflight_requests<br/>platform_grpc_panics_total · _rate_limited_requests_total"]
+        p_build["platform_build_info{version} = 1"]
+        p_err["promhttp_metric_handler_errors_total{cause}<br/>(exempt prefix — failing custom collector)"]
+        p_const["const labels on every platform series:<br/>domain · service · environment"]
     end
 
     subgraph otel["OpenTelemetry"]
-        ot1["HTTP spans\nTracingMiddleware → OTel HTTP span\nPanicRecovery → span error annotation"]
-        ot2["OTLP/gRPC export\n→ OTel Collector → Tempo"]
+        ot_span["server spans · resource: service.name, service.version,<br/>service.namespace, deployment.environment.name"]
+        ot_prov["delegating global provider → SDK provider<br/>BatchSpanProcessor"]
+        ot_exp["OTLP/gRPC → collector → Tempo<br/>(in-process fallback when the exporter cannot be created)"]
     end
 
-    me --> p1
-    me --> p2
-    me --> p3
-    me --> p4
-    me --> p5
-    pr --> p6
-    me --> p7
-    tr --> ot1
-    pr --> ot1
-    ot1 --> ot2
+    subgraph logs["Structured logs (Zap)"]
+        l_req["http_request / grpc_request<br/>method · route · status / grpc_code · duration_ms (float64)<br/>request_id · trace_id · tenant_id, user_id or claimed_*"]
+        l_sec["auth: request rejected · context: request rejected<br/>authz: access denied · panic recovered · request aborted"]
+        l_otel["otel_tracing_initialized · otel_exporter_init_failed · otel_error"]
+    end
+
+    subgraph rules["docker/prometheus/rules (reference)"]
+        r_rec["recording rules"]
+        r_slo["multi-window SLO burn-rate alerts<br/>(promtool tests in CI)"]
+    end
+
+    me --> p_http
+    me --> p_grpc
+    pr --> p_http
+    pr --> p_grpc
+    tr --> ot_span
+    ot_span --> ot_prov
+    ot_prov --> ot_exp
+    lo --> l_req
+    pr --> l_sec
+    p_http --> r_rec
+    p_grpc --> r_rec
+    r_rec --> r_slo

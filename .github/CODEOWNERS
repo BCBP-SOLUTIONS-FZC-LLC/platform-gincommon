@@ -4,7 +4,7 @@
 
 # Workflow and release automation changes require explicit sign-off.
 .github/workflows/ @BCBP-SOLUTIONS-FZC-LLC/platform-team
-.github/dependabot.yml @BCBP-SOLUTIONS-FZC-LLC/platform-team
+.github/dependabot.yml.disabled @BCBP-SOLUTIONS-FZC-LLC/platform-team
 
 # Public API surface — extra scrutiny.
 pkg/ @BCBP-SOLUTIONS-FZC-LLC/platform-team

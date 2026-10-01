@@ -4,9 +4,6 @@ import (
 	"context"
 	"testing"
 
-	grpcmw "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/grpc/middleware"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/grpccommon"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc"
@@ -14,6 +11,11 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+
+	grpcmw "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/grpc/middleware"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/grpccommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
 )
 
 // testServerStream is a minimal grpc.ServerStream for unit tests.
@@ -45,7 +47,7 @@ func (grpcOKError) GRPCStatus() *status.Status {
 }
 
 func TestUnaryMetricsInterceptor_RecordsSuccess(t *testing.T) {
-	metrics.Init("grpc-interceptor-test", "test")
+	fixtures.InitMetrics("grpc-interceptor-test", "test")
 	ic := grpcmw.UnaryMetricsInterceptor()
 
 	req := &emptypb.Empty{}
@@ -63,7 +65,7 @@ func TestUnaryMetricsInterceptor_RecordsSuccess(t *testing.T) {
 }
 
 func TestUnaryMetricsInterceptor_RecordsRateLimited(t *testing.T) {
-	metrics.Init("grpc-rl", "test")
+	fixtures.InitMetrics("grpc-rl", "test")
 	ic := grpcmw.UnaryMetricsInterceptor()
 
 	_, err := ic(
@@ -88,7 +90,7 @@ func TestUnaryMetricsInterceptor_RecordsRateLimited(t *testing.T) {
 }
 
 func TestUnaryMetricsInterceptor_RecordsError(t *testing.T) {
-	metrics.Init("grpc-interceptor-err", "test")
+	fixtures.InitMetrics("grpc-interceptor-err", "test")
 	ic := grpcmw.UnaryMetricsInterceptor()
 
 	_, err := ic(
@@ -105,7 +107,7 @@ func TestUnaryMetricsInterceptor_RecordsError(t *testing.T) {
 }
 
 func TestUnaryMetricsInterceptor_UnknownMethod(t *testing.T) {
-	metrics.Init("grpc-unknown-method", "test")
+	fixtures.InitMetrics("grpc-unknown-method", "test")
 	ic := grpcmw.UnaryMetricsInterceptor()
 
 	_, err := ic(
@@ -146,7 +148,7 @@ func TestDefaultStreamInterceptors_NotEmpty(t *testing.T) {
 }
 
 func TestStreamMetricsInterceptor_RecordsSuccess(t *testing.T) {
-	metrics.Init("grpc-stream-success", "test")
+	fixtures.InitMetrics("grpc-stream-success", "test")
 	ic := grpcmw.StreamMetricsInterceptor()
 
 	stream := &testServerStream{ctx: context.Background()}
@@ -178,7 +180,7 @@ func TestStreamMetricsInterceptor_RecordsSuccess(t *testing.T) {
 }
 
 func TestStreamMetricsInterceptor_RecordsError(t *testing.T) {
-	metrics.Init("grpc-stream-err", "test")
+	fixtures.InitMetrics("grpc-stream-err", "test")
 	ic := grpcmw.StreamMetricsInterceptor()
 
 	stream := &testServerStream{ctx: context.Background()}
@@ -262,7 +264,7 @@ func TestStreamMetricsInterceptor_NilInflight_Skips(t *testing.T) {
 }
 
 func TestStreamMetricsInterceptor_RecvMsgError(t *testing.T) {
-	metrics.Init("grpc-stream-recv-err", "test")
+	fixtures.InitMetrics("grpc-stream-recv-err", "test")
 	ic := grpcmw.StreamMetricsInterceptor()
 
 	recvErr := status.Error(codes.Unavailable, "recv failed")
@@ -283,7 +285,7 @@ func TestStreamMetricsInterceptor_RecvMsgError(t *testing.T) {
 }
 
 func TestStreamMetricsInterceptor_SendMsgError(t *testing.T) {
-	metrics.Init("grpc-stream-send-err", "test")
+	fixtures.InitMetrics("grpc-stream-send-err", "test")
 	ic := grpcmw.StreamMetricsInterceptor()
 
 	sendErr := status.Error(codes.ResourceExhausted, "send failed")
@@ -307,7 +309,7 @@ func TestStreamMetricsInterceptor_SendMsgError(t *testing.T) {
 // a panicking unary handler is still counted in grpc_requests_total as Internal/5xx.
 func TestUnaryMetricsInterceptor_PanicRecordedAs5xx(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-grpc-panic-5xx", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-grpc-panic-5xx", "test", reg)
 
 	recovery := grpcmw.UnaryPanicRecoveryInterceptor(nil)
 	metricsIC := grpcmw.UnaryMetricsInterceptor()
@@ -344,7 +346,7 @@ func TestUnaryMetricsInterceptor_PanicRecordedAs5xx(t *testing.T) {
 // TestStreamMetricsInterceptor_PanicRecordedAs5xx mirrors the unary test for streams.
 func TestStreamMetricsInterceptor_PanicRecordedAs5xx(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics.InitWithRegisterer("svc-grpc-stream-panic-5xx", "test", reg)
+	fixtures.InitMetricsWithRegisterer("svc-grpc-stream-panic-5xx", "test", reg)
 
 	recovery := grpcmw.StreamPanicRecoveryInterceptor(nil)
 	metricsIC := grpcmw.StreamMetricsInterceptor()
@@ -379,7 +381,7 @@ func TestStreamMetricsInterceptor_PanicRecordedAs5xx(t *testing.T) {
 }
 
 func TestUnaryMetricsInterceptor_OKStatusWithNonNilError(t *testing.T) {
-	metrics.Init("grpc-ok-err", "test")
+	fixtures.InitMetrics("grpc-ok-err", "test")
 	ic := grpcmw.UnaryMetricsInterceptor()
 
 	// grpcOKError has GRPCStatus() code=OK but is a non-nil error,

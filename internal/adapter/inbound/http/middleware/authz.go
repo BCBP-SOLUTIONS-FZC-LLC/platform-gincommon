@@ -49,14 +49,15 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 			writeJSONError(c, http.StatusInternalServerError, ErrInternal)
 			return
 		}
-		if err := auth.Authorize(ctx.UserID, ctx.Roles, action, resource); err != nil {
+		if err := auth.Authorize(c.Request.Context(), ctx, action, resource); err != nil {
 			if errors.Is(err, domain.ErrForbidden) {
 				if logger != nil {
 					logger.Warn("authz: access denied", map[string]any{
-						"user_id":  ctx.UserID,
-						"roles":    ctx.Roles,
-						"action":   action,
-						"resource": resource,
+						"tenant_id": ctx.TenantID,
+						"user_id":   ctx.UserID,
+						"roles":     ctx.Roles,
+						"action":    action,
+						"resource":  resource,
 					})
 				}
 				writeJSONError(c, http.StatusForbidden, ErrForbidden)
@@ -64,10 +65,11 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 			}
 			if logger != nil {
 				logger.Error("authz: internal authorization error", map[string]any{
-					"user_id":  ctx.UserID,
-					"action":   action,
-					"resource": resource,
-					"error":    service.SanitizeString(err.Error()),
+					"tenant_id": ctx.TenantID,
+					"user_id":   ctx.UserID,
+					"action":    action,
+					"resource":  resource,
+					"error":     service.SanitizeString(err.Error()),
 				})
 			}
 			writeJSONError(c, http.StatusInternalServerError, ErrInternal)

@@ -26,6 +26,12 @@ const (
 	MaxHeaderValueLen = 256
 	// MaxRoleLen is the maximum length of a single role token in x-tenant-roles.
 	MaxRoleLen = 64
+	// MaxRolesHeaderLen is the maximum total length in bytes of x-tenant-roles (after
+	// joining repeated gRPC metadata entries with ","). Longer values are rejected.
+	MaxRolesHeaderLen = 4096
+	// MaxRoles is the maximum number of distinct valid roles accepted from
+	// x-tenant-roles. More roles than this are rejected, not truncated.
+	MaxRoles = 64
 	// MaxRequestIDLen is the maximum length of x-request-id when accepted from clients.
 	MaxRequestIDLen = 128
 )

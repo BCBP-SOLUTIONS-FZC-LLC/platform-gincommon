@@ -29,11 +29,16 @@ Import **`pkg/gincommon`** and **`pkg/grpccommon`** only. Do not import `interna
 - **PATCH:** Drop-in replacement; upgrade recommended for security fixes.
 - **Pre-1.0:** Not applicable after `v1.0.0`. Future `v0.y.z` tags will not be used once `v1.0.0` is published.
 
+### Recorded exceptions
+
+- **`v1.4.0` ships breaking changes as a MINOR release.** It requires `Config.Domain` (or `OBSERVABILITY_DOMAIN`) and panics at startup without it, removes the pre-standard metric names, changes the `Authorizer` interface to `Authorize(ctx, *RequestContext, action, resource)`, stops `PropagateHeaders` from forwarding identity headers, and reorders the gRPC `Full*` chains. These would normally require `v2.0.0` with a `/v2` module path. The platform team chose a MINOR release because no consumer of `v1.x` had been deployed to any environment, and every consuming service is upgraded to `v1.4.0` in lockstep. Do **not** let `go get -u` pull `v1.4.0` into a service without following the migration steps in `CHANGELOG.md` (`[1.4.0]`) and `docs/observability/migration.md`. Later `v1.x` releases follow the guarantees above again.
+
 ## Supported releases
 
 | Version | Status | Go module | Supported until |
 |---------|--------|-----------|-----------------|
-| `v1.0.x` | **Current** | `@v1.0.0` | Active; patch releases as needed |
+| `v1.4.x` | **Current** | `@v1.4.0` | Active; patch releases as needed |
+| `v1.0.x`–`v1.3.x` | Superseded | `@v1.3.0` | No further releases; upgrade to `v1.4.x` |
 | `< v1.0.0` | — | — | No tagged releases before `v1.0.0` |
 
 When a new **MAJOR** line ships (e.g. `v2`), the previous major receives **security fixes only** for a period defined by the platform team (typically 6 months after `v2.0.0`).
@@ -43,7 +48,7 @@ When a new **MAJOR** line ships (e.g. `v2`), the previous major receives **secur
 Pin in your service `go.mod`:
 
 ```bash
-go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@v1.0.0
+go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@v1.4.0
 ```
 
 | Pin style | Use when |

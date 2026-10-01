@@ -444,7 +444,7 @@ func TestStreamLoggingInterceptor_NilLogger_NoOp(t *testing.T) {
 
 type errAuthorizer2 struct{}
 
-func (errAuthorizer2) Authorize(string, []string, string, string) error {
+func (errAuthorizer2) Authorize(context.Context, *domain.RequestContext, string, string) error {
 	return errors.New("authorize failed unexpectedly")
 }
 
@@ -1264,7 +1264,9 @@ func TestUnaryAuthZInterceptor_InternalErrorWithLogger_LogsError(t *testing.T) {
 
 type alwaysErrAuthorizer struct{ err error }
 
-func (a *alwaysErrAuthorizer) Authorize(_ string, _ []string, _, _ string) error { return a.err }
+func (a *alwaysErrAuthorizer) Authorize(context.Context, *domain.RequestContext, string, string) error {
+	return a.err
+}
 
 // FullUnaryInterceptors: empty ServiceName must panic.
 func TestFullUnaryInterceptors_EmptyServiceNamePanics(t *testing.T) {

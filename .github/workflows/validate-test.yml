@@ -1,0 +1,77 @@
+# Reusable workflow — test gate.
+# Race detector (unit · integration · e2e) + coverage (≥ 98%) in one run.
+# Called by ci.yml and release.yml. Gates trivy, smoke, interop and release.
+name: Validate / Test
+
+"on":
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to check out (leave empty to use the caller ref)'
+        type: string
+        required: false
+        default: ''
+    outputs:
+      pct:
+        description: 'Total statement coverage percentage'
+        value: ${{ jobs.test.outputs.pct }}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      pct: ${{ steps.gate.outputs.pct }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Verify modules
+        run: go mod verify
+
+      # Mandatory blocking gate: the full suite (unit, integration, e2e,
+      # including test/unit/platformmetrics — gincommon's own metrics checked
+      # against the Platform Observability Registry) under -race, writing
+      # coverage.out with -coverpkg over internal/, pkg/ and cmd/ (tests live
+      # under test/, so plain `go test ./...` would report 0%). A data race
+      # blocks every downstream job. Do NOT remove -race or skip this step.
+      - name: Tests — unit · integration · e2e (race + coverage)
+        run: make test-cover
+
+      # Do not lower this threshold.
+      - name: Coverage threshold gate (≥ 98%)
+        id: gate
+        env:
+          COVERAGE_THRESHOLD: '98'
+        run: bash .github/scripts/coverage-gate.sh
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-report-${{ github.sha }}
+          path: coverage.out
+          if-no-files-found: ignore
+          retention-days: 30

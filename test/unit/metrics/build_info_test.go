@@ -13,8 +13,8 @@ func TestBuildInfo_ExposesServiceAndVersion(t *testing.T) {
 		t.Fatal("BuildInfo not initialized")
 	}
 
-	if got := testutil.ToFloat64(metrics.BuildInfo.WithLabelValues()); got != 1 {
-		t.Fatalf("build_info = %v, want 1", got)
+	if got := testutil.ToFloat64(metrics.BuildInfo.WithLabelValues(testBuildVersion)); got != 1 {
+		t.Fatalf("platform_build_info = %v, want 1", got)
 	}
 
 	mfs, err := prometheus.DefaultGatherer.Gather()
@@ -23,17 +23,17 @@ func TestBuildInfo_ExposesServiceAndVersion(t *testing.T) {
 	}
 
 	for _, mf := range mfs {
-		if mf.GetName() != "build_info" {
+		if mf.GetName() != "platform_build_info" {
 			continue
 		}
 		if len(mf.GetMetric()) != 1 {
 			t.Fatalf("metric count = %d, want 1", len(mf.GetMetric()))
 		}
 		labels := constLabelsMap(mf.GetMetric()[0])
-		if labels["service"] != testServiceName || labels["version"] != testBuildVersion {
+		if labels["service"] != testServiceName || labels["version"] != testBuildVersion || labels["domain"] != "iam" {
 			t.Fatalf("labels = %v, want service=%q version=%q", labels, testServiceName, testBuildVersion)
 		}
 		return
 	}
-	t.Fatal("build_info not found in gather output")
+	t.Fatal("platform_build_info not found in gather output")
 }

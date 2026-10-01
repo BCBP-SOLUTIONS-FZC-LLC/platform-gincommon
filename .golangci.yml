@@ -15,10 +15,9 @@ linters:
         - name: exported
         - name: var-naming
           disabled: true # allow Http*, Grpc* metric names matching Prometheus
-
-issues:
-  exclude-rules:
-    # Test functions and test-only packages are not public API.
-    - path: '_test\.go'
-      linters:
-        - revive
+  exclusions:
+    rules:
+      # Test functions and test-only packages are not public API.
+      - path: '_test\.go'
+        linters:
+          - revive

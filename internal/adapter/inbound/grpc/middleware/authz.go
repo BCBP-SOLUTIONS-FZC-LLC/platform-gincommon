@@ -16,6 +16,9 @@ import (
 // Requires UnaryContextInterceptor to have run first.
 func UnaryAuthZInterceptor(auth port.Authorizer, action, resource string, logger port.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if info != nil && isHealthMethod(info.FullMethod) {
+			return handler(ctx, req) // health probes carry no identity (see RequireAuth)
+		}
 		if err := authorizeGRPC(ctx, auth, action, resource, logger); err != nil {
 			return nil, err
 		}
@@ -26,6 +29,9 @@ func UnaryAuthZInterceptor(auth port.Authorizer, action, resource string, logger
 // StreamAuthZInterceptor authorizes streaming gRPC calls.
 func StreamAuthZInterceptor(auth port.Authorizer, action, resource string, logger port.Logger) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if info != nil && isHealthMethod(info.FullMethod) {
+			return handler(srv, ss) // health probes carry no identity (see RequireAuth)
+		}
 		if err := authorizeGRPC(ss.Context(), auth, action, resource, logger); err != nil {
 			return err
 		}
@@ -46,24 +52,26 @@ func authorizeGRPC(ctx context.Context, auth port.Authorizer, action, resource s
 		return status.Error(codes.Internal, "internal server error")
 	}
 
-	if err := auth.Authorize(rc.UserID, rc.Roles, action, resource); err != nil {
+	if err := auth.Authorize(ctx, rc, action, resource); err != nil {
 		if errors.Is(err, domain.ErrForbidden) {
 			if logger != nil {
 				logger.Warn("grpc authz: access denied", map[string]any{
-					"user_id":  rc.UserID,
-					"roles":    rc.Roles,
-					"action":   action,
-					"resource": resource,
+					"tenant_id": rc.TenantID,
+					"user_id":   rc.UserID,
+					"roles":     rc.Roles,
+					"action":    action,
+					"resource":  resource,
 				})
 			}
 			return status.Error(codes.PermissionDenied, "forbidden")
 		}
 		if logger != nil {
 			logger.Error("grpc authz: internal error", map[string]any{
-				"user_id":  rc.UserID,
-				"action":   action,
-				"resource": resource,
-				"error":    service.SanitizeString(err.Error()),
+				"tenant_id": rc.TenantID,
+				"user_id":   rc.UserID,
+				"action":    action,
+				"resource":  resource,
+				"error":     service.SanitizeString(err.Error()),
 			})
 		}
 		return status.Error(codes.Internal, "internal server error")

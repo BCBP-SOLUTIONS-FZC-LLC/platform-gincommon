@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestRBACService_Authorize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := svc.Authorize("user-1", tt.roles, tt.action, tt.resource)
+			err := svc.Authorize(context.Background(), &domain.RequestContext{UserID: "user-1", TenantID: "t-1", Roles: tt.roles}, tt.action, tt.resource)
 			if tt.wantErr == nil && err != nil {
 				t.Fatalf("Authorize() err = %v, want nil", err)
 			}

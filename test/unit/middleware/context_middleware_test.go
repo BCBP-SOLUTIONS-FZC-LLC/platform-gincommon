@@ -24,7 +24,7 @@ func (m *mockCtxBuilder) BuildContext(tenantID, userID string, roles []string, t
 func ctxMiddlewareRouter(b *mockCtxBuilder) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(middleware.ContextMiddleware(b))
+	r.Use(middleware.ContextMiddleware(b, nil))
 	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
 	return r
 }
@@ -77,7 +77,7 @@ func TestContextMiddleware_HappyPath_SetsContext(t *testing.T) {
 	var gotCtx *domain.RequestContext
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(middleware.ContextMiddleware(&mockCtxBuilder{}))
+	r.Use(middleware.ContextMiddleware(&mockCtxBuilder{}, nil))
 	r.GET("/x", func(c *gin.Context) {
 		v, _ := c.Get(middleware.CtxRequestContextKey)
 		gotCtx, _ = v.(*domain.RequestContext)
