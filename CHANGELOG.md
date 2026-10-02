@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Registry: four more Tier 2 `iam_*` metrics** (`proposed`, no owner yet). IAM services already emit them, and until now `metricslint check` reported them as namespace errors:
+  - `iam_rls_violations_total{violation_type}`: emitted by iam-org-membership, iam-audit-log and iam-user-profile. The new `violation_type` label is a fixed set: `cross_tenant_access`, `missing_or_invalid_guc`, `missing_primary_email`, `other`.
+  - `iam_auth_session_revoke_failed_total{reason}`, with `reason` ∈ `transport`, `http_4xx`, `http_5xx`, `http_other`. iam-org-membership currently puts the raw HTTP status code in `reason` (e.g. `"503"`), which the `reason` vocabulary rejects, so it has to map codes to these classes.
+  - `iam_lifecycle_event_skipped_total{event_type}` and `iam_lifecycle_event_lag_seconds{event_type}`. The new `lifecycle_event_lag` bucket preset is iam-org-membership's existing bucket set. The governance note on the lag histogram records its overlap with `platform_event_propagation_seconds`.
+
 ### Fixed
 
 - **`release.yml`: release builds use their own GHA cache scope** (`release-<tag>`). `build-image` exports to it, and `trivy`, `smoke` and `push` read only from it.

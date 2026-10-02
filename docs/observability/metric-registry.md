@@ -66,6 +66,10 @@ Every metric carries the centrally injected const labels `domain`, `service`, `e
 | `iam_tenant_resolution_total` (iam) | services | counter | proposed | `strategy`, `outcome` | Attempts to resolve the tenant of a request or event. | sum by (environment, strategy, outcome) of rate(). |
 | `iam_identity_sync_total` (iam) | services | counter | proposed | `source`, `outcome` | Identity records synchronised from an external identity source. | sum by (environment, source, outcome) of rate(). |
 | `iam_realm_operations_total` (iam) | services | counter | proposed | `operation`, `outcome` | Administrative realm operations (create, update, delete, configure). | sum by (environment, operation, outcome) of rate(). |
+| `iam_rls_violations_total` (iam) | services | counter | proposed | `violation_type` | Row-level-security violations recorded in the service's rls_violation_log, by violation_type. Fed from a periodic scrape of the log table, not from the request path. | sum by (environment, service, violation_type) of increase(); any increase is a security signal, so alert on > 0 rather than on a ratio. |
+| `iam_auth_session_revoke_failed_total` (iam) | services | counter | proposed | `reason`<br>`reason` ∈ `transport`, `http_4xx`, `http_5xx`, `http_other` | Calls to the realm provisioner's RevokeUserSessions that errored or returned non-2xx. The caller fails open (AUTH-8), so every increment is a user session that may outlive its membership. | sum by (environment, service, reason) of rate(); alert on sustained rate > 0. |
+| `iam_lifecycle_event_skipped_total` (iam) | services | counter | proposed | `event_type` | Tenant lifecycle events skipped by the recency guard (EVT-14: event time <= the tenant's last applied event time), by event_type. | sum by (environment, service, event_type) of rate(); a sustained rate means out-of-order delivery or a replay. |
+| `iam_lifecycle_event_lag_seconds` (iam) | services | histogram (lifecycle_event_lag) | proposed | `event_type` | Seconds from a tenant lifecycle event's envelope time to the moment the consumer applied it, by event_type. Sustained high p99 flags a consumer backlog (SLO-3). | histogram_quantile(0.99, sum by (le, environment, service, event_type) (rate(iam_lifecycle_event_lag_seconds_bucket[5m]))). Includes producer clock skew. |
 
 ## Legacy metrics (removed or deprecated)
 
@@ -157,6 +161,7 @@ Every metric carries the centrally injected const labels `domain`, `service`, `e
 | `strategy` | pattern `^[a-z][a-z0-9_]{0,63}$` | 20 | bounded enum | Resolution or authentication strategy from a fixed set, snake_case. |
 | `topic` | pattern `^(unknown\|[A-Za-z0-9][A-Za-z0-9._-]{0,255})$` | 100 | bounded by configured topics | Topic name: the last segment of the topic ARN (e.g. iam-events, orders.fifo), never the full ARN; unknown when empty. |
 | `version` | pattern `^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$` | - | one value per deployment | Build version of the emitting binary (Config.BuildVersion / BUILD_VERSION; unknown when unset). Only on build-info metrics: a per-build label on every series would multiply series on each deploy. |
+| `violation_type` | `cross_tenant_access`, `missing_or_invalid_guc`, `missing_primary_email`, `other` | - | fixed | Row-level-security violation class recorded in rls_violation_log by rls_check_tenant() and the service's own checks, snake_case; other for anything outside the set. |
 
 ## Prohibited labels
 
@@ -170,6 +175,7 @@ Every metric carries the centrally injected const labels `domain`, `service`, `e
 | `db_query` | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 |
 | `dependency_request` | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 |
 | `event_propagation` | 0.01 0.05 0.1 0.25 0.5 1 2.5 5 10 30 60 300 900 3600 |
+| `lifecycle_event_lag` | 0.05 0.1 0.5 1 5 15 60 300 1800 |
 | `message_processing` | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 60 120 |
 | `payload_size` | 128 256 512 1024 2048 4096 8192 16384 32768 65536 262144 1.048576e+06 4.194304e+06 1.6777216e+07 |
 | `request_duration` | 0.001 0.002 0.005 0.01 0.015 0.025 0.05 0.075 0.1 0.15 0.2 0.3 0.5 0.75 1 2 5 10 |

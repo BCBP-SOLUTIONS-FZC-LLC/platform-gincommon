@@ -290,7 +290,7 @@ Limits (`internal/core/domain/transport.go`): `MaxHeaderValueLen = 256`, `MaxRol
 | `exempt_prefixes` | `go_`, `process_`, `promhttp_`, `python_` (runtime collectors, not validated) |
 | `bucket_presets` | `request_duration`, `payload_size`, `dependency_request`, `message_processing`, `event_propagation`, `db_query`, `db_pool_acquire` (all seven) |
 | `labels` | 24 label definitions: `description`, `values` or `pattern`, `max_values`, `cardinality` |
-| `metrics` | 110 entries: `name`, `tier`, `domain`, `type`, `help`, `labels`, `label_values`, `buckets`, `unit`, `aggregation`, `cardinality`, `status` (`approved`/`proposed`/`deprecated`/`removed`), `owner`, `replacements`, `sunset`, `governance_notes`. Today: 5 `approved`, 48 `proposed` (44 platform + 4 domain), 57 `removed` (legacy); no entry is `deprecated` |
+| `metrics` | 114 entries: `name`, `tier`, `domain`, `type`, `help`, `labels`, `label_values`, `buckets`, `unit`, `aggregation`, `cardinality`, `status` (`approved`/`proposed`/`deprecated`/`removed`), `owner`, `replacements`, `sunset`, `governance_notes`. Today: 5 `approved`, 52 `proposed` (44 platform + 8 domain), 57 `removed` (legacy); no entry is `deprecated` |
 
 Key label vocabularies:
 
@@ -1102,7 +1102,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | OQ-1 | **Ratify gincommon's 16 `platform_*` entries** (`proposed`). Until then `metricslint check -strict` fails on every gincommon service unless `-allow-proposed-owner platform-gincommon,platform-events,platform-pgcommon` is passed | Observability governance | Open |
 | OQ-2 | **`_bytes` histogram exception** to the `_seconds` suffix rule (registry `unit: bytes`) | Observability governance | Open |
 | OQ-3 | **Domain vocabulary spelling** (`tender_management`) | Observability governance | Open |
-| OQ-4 | **Ownerless Tier 2 entries** (`iam_auth_events_total`, `iam_tenant_resolution_total`, `iam_identity_sync_total`, `iam_realm_operations_total`) need an owner before ratification | IAM + governance | Open |
+| OQ-4 | **Ownerless Tier 2 entries** (`iam_auth_events_total`, `iam_tenant_resolution_total`, `iam_identity_sync_total`, `iam_realm_operations_total`, `iam_rls_violations_total`, `iam_auth_session_revoke_failed_total`, `iam_lifecycle_event_skipped_total`, `iam_lifecycle_event_lag_seconds`) need an owner before ratification | IAM + governance | Open |
 | OQ-5 | **Versioning of the breaking release.** `v2.0.0` with a `/v2` path vs `v1.4.0` with a written exception | Platform team | **Resolved** — `v1.4.0` + recorded exception (VERSIONING.md) |
 | OQ-6 | **`PropagateHeaders` identity removal in consumers.** Only `iam-delegation` calls it (4 outbound clients: tender, catalogadmin, userprofile, orgmembership); any of those that needs identity must switch to `PropagateIdentityHeaders` on upgrade | iam-delegation owners | Open |
 | OQ-7 | **`alpine:3.21` end of support (~Nov 2026).** Bump the demo runtime image and re-pin (`make pin-base-images`, requires docker) | Library maintainers | Open |
