@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-03
+
 ### Added
 
 - **Trace export can be turned off from the environment.** `OTEL_EXPORTER_OTLP_ENDPOINT=none` (also `off` / `disabled`, case-insensitive) or the OpenTelemetry spec's `OTEL_TRACES_EXPORTER=none` now disables OTLP export for `InitTracingWithConfig`, `InitTracingFromEnv` and the middleware stacks: the in-process TracerProvider is still installed (trace and request IDs keep working) and initialisation logs `exporter=disabled`.
