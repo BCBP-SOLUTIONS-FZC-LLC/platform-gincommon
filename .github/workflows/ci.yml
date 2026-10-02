@@ -247,7 +247,7 @@ jobs:
   interop:
     name: Cross-language compatibility
     needs: validate-test
-    uses: BCBP-SOLUTIONS-FZC-LLC/platform-interop-tests/.github/workflows/interop.yml@c7e62e6976274ed4cf9c78f86b5f58467e59afc2 # main 2026-10-02 (no tags yet)
+    uses: BCBP-SOLUTIONS-FZC-LLC/platform-interop-tests/.github/workflows/interop.yml@5475fcdd4ec3676253f0c7171bc378a2231bd4a9 # main 2026-10-02 (platform-interop-tests#3 + #4: module-path-aware go-probe + private module fetch)
     with:
       # This repo's own PR/branch ref; the other five default to their main branch (see
       # platform-interop-tests/README.md for why).
