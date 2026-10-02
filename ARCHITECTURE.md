@@ -41,7 +41,7 @@ graph TD
     end
 
     subgraph registry["Governance  —  internal/obsregistry/"]
-        reg["registry.json (embedded, 110 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
+        reg["registry.json (embedded, 114 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
     end
 
     subgraph core["Core  —  internal/core/  (no framework imports)"]
@@ -725,7 +725,7 @@ graph LR
         own["gincommon entries<br/>platform_http_* · platform_grpc_* · platform_build_info<br/>status proposed, pending governance"]
     end
 
-    subgraph registry["internal/obsregistry/registry.json — embedded, 110 entries"]
+    subgraph registry["internal/obsregistry/registry.json — embedded, 114 entries"]
         entries["metrics: 5 approved · 48 proposed · 57 removed (legacy, with replacements)<br/>labels: vocabulary, patterns, max_values, cardinality<br/>prohibited labels (tenant_id, user_id, ...)<br/>bucket presets · owners · governance_notes"]
         parse["Parse: strict — unknown fields, duplicates,<br/>undefined labels/buckets, legacy without replacement"]
     end
@@ -764,7 +764,7 @@ graph LR
 | Tier | Prefix | Who defines it | How it's built |
 |---|---|---|---|
 | 1 | `platform_*` | Registry (cross-domain) | `registryBuilder` (gincommon's own), `NewShared*Vec` |
-| 2 | `<domain>_*` | Registry (one domain, e.g. the four `iam_*` entries) | `NewShared*Vec` |
+| 2 | `<domain>_*` | Registry (one domain, e.g. the eight `iam_*` entries) | `NewShared*Vec` |
 | 3 | `<domain>_<service>_*` | The service | `New*Vec`, validated by `CheckCustom` and `metricslint` |
 
 `domain`, `service` and `environment` are const labels injected centrally, never declared by instrumentation. Each label name has one meaning: platform HTTP uses `method` and platform gRPC uses `grpc_method`. Byte-size histograms use `_bytes` through an explicit `unit: bytes` exception to the `_seconds` rule, which is pending governance ratification.
@@ -1047,7 +1047,7 @@ Before a service ships on `v1.4.0`, verify:
 | Import a sibling registry | platform-events / platform-pgcommon releases, verbatim; their contract wins on conflict | registry self-check |
 | Mirror | re-copy `registry.json` into platform-fastapicommon | manual — on every change |
 
-Today 48 entries are `proposed`, including all 16 gincommon-owned `platform_*` metrics and the four `iam_*` Tier 2 metrics (the only ownerless ones). `-allow-proposed-owner platform-gincommon,platform-events,platform-pgcommon` is the documented strict-mode workaround until ratification.
+Today 52 entries are `proposed`, including all 16 gincommon-owned `platform_*` metrics and the eight `iam_*` Tier 2 metrics (the only ownerless ones). `-allow-proposed-owner platform-gincommon,platform-events,platform-pgcommon` is the documented strict-mode workaround until ratification.
 
 ---
 
