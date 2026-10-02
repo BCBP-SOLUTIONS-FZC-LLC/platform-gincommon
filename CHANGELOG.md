@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Trace export can be turned off from the environment.** `OTEL_EXPORTER_OTLP_ENDPOINT=none` (also `off` / `disabled`, case-insensitive) or the OpenTelemetry spec's `OTEL_TRACES_EXPORTER=none` now disables OTLP export for `InitTracingWithConfig`, `InitTracingFromEnv` and the middleware stacks: the in-process TracerProvider is still installed (trace and request IDs keep working) and initialisation logs `exporter=disabled`.
+  - Previously there was no way to do this with `InitTracingWithConfig`. An empty endpoint is treated as unset and falls back to `localhost:4317`, and `OTEL_TRACES_EXPORTER` was not read. A local run without a collector therefore logged a failed export on every flush.
+  - Behaviour is unchanged for every other value: an empty or unset endpoint still means `localhost:4317`, and an `OTEL_TRACES_EXPORTER` other than `none` is ignored. New helper: `config.OtelTraceExportDisabled`.
+
 ## [1.5.0] - 2026-10-03
 
 ### Added

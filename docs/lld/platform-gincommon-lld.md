@@ -965,7 +965,8 @@ See §7.3. Zap: console encoder in dev/local, JSON otherwise. Level from `LOG_LE
 | `APP_ENV` → `ENVIRONMENT` | — | `environment` label (trimmed, lowercased). Only `APP_ENV` = `dev`/`local` selects the dev OTLP-insecure, sampling and log-format defaults; `ENVIRONMENT=dev` sets the label only |
 | `BUILD_VERSION` | `unknown` | `platform_build_info{version}`, `service.version` |
 | `OTEL_SERVICE_NAME` → `APP_NAME` | — (no library default) | service name for `InitTracingFromEnv`; unset → provisional `unknown_service` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC endpoint |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC endpoint; empty = unset; `none`/`off`/`disabled` disables export |
+| `OTEL_TRACES_EXPORTER` | — | `none` disables export; other values ignored |
 | `OTEL_EXPORTER_OTLP_INSECURE` | `true` in dev/local, else `false` | plaintext OTLP |
 | `OTEL_TRACES_SAMPLER_RATIO` → `OTEL_TRACES_SAMPLER_ARG` | `1.0` dev/local, `0.1` otherwise | sampling ratio (invalid → default + warning) |
 | `OTEL_TRACES_IGNORE_REMOTE_PARENT_SAMPLED` | `false` | remote-parent re-sampling |

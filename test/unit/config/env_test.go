@@ -158,3 +158,29 @@ func TestGetenvInt_EmptyEnvVar(t *testing.T) {
 		t.Fatalf("AppPort() with empty env = %d, want default 8080", got)
 	}
 }
+
+func TestOtelExporterEndpoint_Disable(t *testing.T) {
+	cases := []struct {
+		name, endpoint, exporter, want string
+	}{
+		{"unset defaults to localhost", "", "", "localhost:4317"},
+		{"explicit endpoint", "collector:4317", "", "collector:4317"},
+		{"endpoint none", "none", "", ""},
+		{"endpoint OFF (case-insensitive)", " OFF ", "", ""},
+		{"endpoint disabled", "disabled", "", ""},
+		{"spec OTEL_TRACES_EXPORTER=none wins over an endpoint", "collector:4317", "none", ""},
+		{"other exporter values are ignored", "collector:4317", "otlp", "collector:4317"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tc.endpoint)
+			t.Setenv("OTEL_TRACES_EXPORTER", tc.exporter)
+			if got := config.OtelExporterEndpoint(); got != tc.want {
+				t.Fatalf("OtelExporterEndpoint() = %q, want %q", got, tc.want)
+			}
+			if got := config.OtelTraceExportDisabled(); got != (tc.want == "") {
+				t.Fatalf("OtelTraceExportDisabled() = %v, want %v", got, tc.want == "")
+			}
+		})
+	}
+}

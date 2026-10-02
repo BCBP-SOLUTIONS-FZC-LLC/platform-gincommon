@@ -644,7 +644,7 @@ flowchart TD
 
 | Setting | Default | Notes |
 |---|---|---|
-| Endpoint | `OTEL_EXPORTER_OTLP_ENDPOINT`, else `localhost:4317` | Exporter creation failure → `otel_exporter_init_failed` warning + in-process provider |
+| Endpoint | `OTEL_EXPORTER_OTLP_ENDPOINT`, else `localhost:4317` (an empty value counts as unset) | `none`/`off`/`disabled`, or the spec's `OTEL_TRACES_EXPORTER=none`, disables export (in-process provider, init logs `exporter=disabled`). Exporter creation failure → `otel_exporter_init_failed` warning + in-process provider |
 | TLS | on, unless `APP_ENV` is `dev`/`local` (trimmed, lowercased) | `OTEL_EXPORTER_OTLP_INSECURE` overrides |
 | Sampler | `ParentBased(ratio)`: `1.0` in dev/local, `0.1` otherwise | `OTEL_TRACES_IGNORE_REMOTE_PARENT_SAMPLED=true` re-samples remote-sampled parents at the ratio (edge services) |
 | Resource | `service.name`, `service.version`, `service.namespace` (domain), `deployment.environment.name` | Schemaless merge with `resource.Default()`, so no schema-URL conflict |

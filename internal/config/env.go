@@ -76,9 +76,29 @@ func OtelServiceNameEnv() string {
 	return getenv("OTEL_SERVICE_NAME", os.Getenv("APP_NAME"))
 }
 
-// OtelExporterEndpoint returns OTEL_EXPORTER_OTLP_ENDPOINT (gRPC host:port).
+// OtelExporterEndpoint returns OTEL_EXPORTER_OTLP_ENDPOINT (gRPC host:port),
+// default localhost:4317. It returns "" — trace export disabled, spans kept
+// in-process — when export is switched off explicitly:
+// OTEL_EXPORTER_OTLP_ENDPOINT=none (or off / disabled), or the OpenTelemetry
+// spec's OTEL_TRACES_EXPORTER=none. An empty OTEL_EXPORTER_OTLP_ENDPOINT is
+// still treated as unset, as before.
 func OtelExporterEndpoint() string {
+	if OtelTraceExportDisabled() {
+		return ""
+	}
 	return getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
+}
+
+// OtelTraceExportDisabled reports whether trace export is switched off:
+// OTEL_EXPORTER_OTLP_ENDPOINT is none, off or disabled, or
+// OTEL_TRACES_EXPORTER is none (case-insensitive). Any other
+// OTEL_TRACES_EXPORTER value is ignored: the library always exports OTLP/gRPC.
+func OtelTraceExportDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))) {
+	case "none", "off", "disabled":
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("OTEL_TRACES_EXPORTER")), "none")
 }
 
 // OtelExporterInsecure enables plaintext OTLP/gRPC.

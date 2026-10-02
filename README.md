@@ -777,7 +777,8 @@ Read by the library at startup in a consuming service (`.env-example` documents 
 | `APP_ENV` / `ENVIRONMENT` | — | `environment` label (`local\|dev\|test\|staging\|prod`, trimmed + lowercased; `APP_ENV` first). `dev`/`local` select dev log format, debug level, plaintext OTLP, 100% sampling |
 | `BUILD_VERSION` | `unknown` | `platform_build_info{version}`, OTel `service.version`; sanitised with a warning when invalid |
 | `APP_NAME` / `OTEL_SERVICE_NAME` | — (**no library default**) | OTel `service.name` for `InitTracingFromEnv` (`OTEL_SERVICE_NAME` first); unset → warning + provisional `unknown_service` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC collector |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC collector. An empty value counts as unset; `none`, `off` or `disabled` turns trace export off (spans stay in-process) |
+| `OTEL_TRACES_EXPORTER` | — | Only `none` is honoured: it turns trace export off. The library always exports OTLP/gRPC otherwise |
 | `OTEL_EXPORTER_OTLP_INSECURE` | `true` in `dev`/`local`, else `false` | Plaintext OTLP |
 | `OTEL_TRACES_SAMPLER_RATIO` / `OTEL_TRACES_SAMPLER_ARG` | `1.0` dev/local, `0.1` otherwise | Sampling ratio `0.0`–`1.0` (`_RATIO` takes precedence; invalid → default + warning) |
 | `OTEL_TRACES_IGNORE_REMOTE_PARENT_SAMPLED` | `false` | Re-sample remote-sampled parents at the ratio — enable on edge services |

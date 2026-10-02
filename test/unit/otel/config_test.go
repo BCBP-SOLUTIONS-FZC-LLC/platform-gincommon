@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -245,5 +246,39 @@ func TestEnsureInitTelemetry_ReplacesProvisionalProvider(t *testing.T) {
 	otel.EnsureInitTelemetry("other", "1", otel.TelemetryConfig{})
 	if otel.SDKProvider() != configured {
 		t.Fatal("EnsureInitTelemetry replaced a configured provider")
+	}
+}
+
+// OTEL_EXPORTER_OTLP_ENDPOINT=none (or the spec's OTEL_TRACES_EXPORTER=none)
+// reaches the TracerProvider as "no endpoint": spans stay in-process and no
+// exporter is created, so a host without a collector does not log failed
+// exports.
+func TestEnvConfig_ExportDisabledReachesTelemetry(t *testing.T) {
+	for _, env := range []map[string]string{
+		{"OTEL_EXPORTER_OTLP_ENDPOINT": "none"},
+		{"OTEL_EXPORTER_OTLP_ENDPOINT": "collector:4317", "OTEL_TRACES_EXPORTER": "none"},
+	} {
+		t.Run(fmt.Sprint(env), func(t *testing.T) {
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("OTEL_TRACES_EXPORTER", "")
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			cfg := otel.EnvConfig("iam", "dev", nil)
+			if cfg.Endpoint != "" {
+				t.Fatalf("Endpoint = %q, want export disabled", cfg.Endpoint)
+			}
+
+			otel.Shutdown()
+			t.Cleanup(otel.Shutdown)
+			buf := captureStderrLog(t)
+			otel.InitTelemetry("svc", "1", cfg)
+			if out := buf.String(); !strings.Contains(out, "disabled") {
+				t.Fatalf("init line does not report export disabled: %s", out)
+			}
+			if otel.SDKProvider() == nil {
+				t.Fatal("in-process TracerProvider must still be installed")
+			}
+		})
 	}
 }
