@@ -1,20 +1,22 @@
 package fixtures
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
 
-// ErrorJSON is the standard JSON body returned by writeJSONError / panic recovery.
-type ErrorJSON struct {
-	Error     string `json:"error"`
-	Status    int    `json:"status"`
-	TraceID   string `json:"trace_id"`
-	RequestID string `json:"request_id"`
-}
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+)
 
-// DecodeErrorJSON parses the standard middleware error response body.
-func DecodeErrorJSON(body []byte) (ErrorJSON, error) {
-	var out ErrorJSON
+// DecodeProblem parses an RFC 9457 problem body written by the middleware.
+func DecodeProblem(body []byte) (problem.Problem, error) {
+	var out problem.Problem
 	if err := json.Unmarshal(body, &out); err != nil {
-		return ErrorJSON{}, err
+		return problem.Problem{}, err
 	}
 	return out, nil
+}
+
+// IsProblemType reports whether a problem type URI is the platform type t under any base.
+func IsProblemType(uri string, t problem.Type) bool {
+	return strings.HasSuffix(uri, "/"+t.ID())
 }

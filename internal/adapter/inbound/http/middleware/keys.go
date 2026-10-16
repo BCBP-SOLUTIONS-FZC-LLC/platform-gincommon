@@ -1,6 +1,6 @@
 package middleware
 
-import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
+import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 
 const (
 	// CtxTraceIDKey stores the OpenTelemetry trace ID in Gin context.

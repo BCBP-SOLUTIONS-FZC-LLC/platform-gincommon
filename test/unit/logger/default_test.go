@@ -3,7 +3,7 @@ package logger_test
 import (
 	"testing"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/logger"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
 )
 
 func TestDefault_BuiltOnceAndUsable(t *testing.T) {

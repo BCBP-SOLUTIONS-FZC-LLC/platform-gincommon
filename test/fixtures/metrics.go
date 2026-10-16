@@ -3,7 +3,7 @@ package fixtures
 import (
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
 )
 
 // Test identity used by InitMetrics / InitMetricsWithRegisterer.

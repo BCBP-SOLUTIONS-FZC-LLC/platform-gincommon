@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
 )
 
 func TestRequestDurationBuckets_AreIAMTuned(t *testing.T) {

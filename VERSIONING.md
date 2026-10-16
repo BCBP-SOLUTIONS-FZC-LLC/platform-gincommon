@@ -37,25 +37,28 @@ Import **`pkg/gincommon`** and **`pkg/grpccommon`** only. Do not import `interna
 
 | Version | Status | Go module | Supported until |
 |---------|--------|-----------|-----------------|
-| `v1.4.x` | **Current** | `@v1.4.0` | Active; patch releases as needed |
-| `v1.0.x`–`v1.3.x` | Superseded | `@v1.3.0` | No further releases; upgrade to `v1.4.x` |
+| `v2.x` | **Current** (from `v2.0.0`) | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` | Active |
+| `v1.4.x`–`v1.6.x` | Previous major | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@v1.6.0` | Security fixes only, for the period the platform team sets after `v2.0.0` |
+| `v1.0.x`–`v1.3.x` | Superseded | `@v1.3.0` | No further releases; upgrade to `v2.x` |
 | `< v1.0.0` | — | — | No tagged releases before `v1.0.0` |
 
-When a new **MAJOR** line ships (e.g. `v2`), the previous major receives **security fixes only** for a period defined by the platform team (typically 6 months after `v2.0.0`).
+`v2.0.0` is a proper MAJOR: the error contract became RFC 9457 Problem Details (`ErrorResponse` removed, every HTTP error body and its `Content-Type` changed), so the module path gained the `/v2` suffix Go requires. Import `.../platform-gincommon/v2/pkg/...`; see *Upgrading to v2.0.0* in the README.
+
+When a new **MAJOR** line ships, the previous major receives **security fixes only** for a period defined by the platform team (typically 6 months after `v2.0.0`).
 
 ## Consume a release
 
 Pin in your service `go.mod`:
 
 ```bash
-go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@v1.4.0
+go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@v2.0.0
 ```
 
 | Pin style | Use when |
 |-----------|----------|
-| `@v1.0.0` | Production; exact reproducibility |
-| `@v1.0.3` | Production; latest patch on `1.0` |
-| `@v1.2.0` | Accept new minors on `1.x` (still SemVer-safe) |
+| `@v2.0.0` | Production; exact reproducibility |
+| `@v2.0.3` | Production; latest patch on `2.0` |
+| `@v2.2.0` | Accept new minors on `2.x` (still SemVer-safe) |
 | `@latest` | Experiments only; not recommended for prod |
 
 Go resolves versions from **Git tags** on the default branch (see [Go module versioning](https://go.dev/doc/modules/version-numbers)).
@@ -98,7 +101,8 @@ The release workflow (`.github/workflows/release.yml`) automates validation, Doc
 
 | platform-gincommon | Go (`go.mod`) |
 |--------------------|---------------|
-| `v1.0.x` | `1.26+` |
+| `v1.x` | `1.26+` |
+| `v2.x` | `1.26+` |
 
 Consumer services must use the same or newer Go toolchain as stated in this module’s `go.mod`.
 

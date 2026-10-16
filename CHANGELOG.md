@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Versioning:** these changes ship as **v2.0.0**, a proper MAJOR with the `/v2` module path (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2`), not as a recorded exception. Follow *Upgrading to v2.0.0* in `README.md` and the migration table in `docs/problem-details/README.md`.
+
 ### Security
 
 - **Toolchain `go1.26.6` → `go1.26.9` and `golang.org/x/net` v0.59.0 → v0.60.0**, fixing the standard-library and x/net vulnerabilities `govulncheck` reports as reachable from library code:
@@ -17,6 +19,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - GO-2026-6607 (crypto/tls ECH)
   - GO-2026-6603 (HTTP/2 trailer memory)
   - The demo image builder is re-pinned to `golang:1.26.9-alpine`. The `go 1.26.0` directive is unchanged, so consumers are not forced onto a newer Go, but they should build with 1.26.9 or later for the same fixes.
+
+### Changed (breaking)
+
+- **Module path is `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2`.** Every import changes to `.../platform-gincommon/v2/pkg/...`, and `go run .../v2/cmd/metricslint@vX.Y.Z` replaces the v1 path.
+- **Every HTTP error is an RFC 9457 problem** (`Content-Type: application/problem+json`). The body was `{error, status, trace_id, request_id}`; it is now `{type, title, status, detail, instance, traceId, errorCode, tenantId, timestamp, validationErrors}`. Status codes are unchanged. The request id stays in the `X-Request-ID` response header.
+  - 401s (`RequireAuth`, `ContextMiddleware`): `platform/unauthorized`, with the previous messages as sentences in `detail` (e.g. `Missing or invalid authentication headers.`).
+  - 400 from a `ContextBuilder` error: `platform/bad-request`, `errorCode` `INVALID_REQUEST_CONTEXT`.
+  - 403 from `RequirePermission`: `platform/forbidden`.
+  - 500s (panic, missing request context, nil or failing `Authorizer`): `platform/internal-error` with **no detail**. The v1 bodies exposed `request context missing` / `invalid request context` on 500s.
+  - 503 timeout: `platform/service-unavailable`, `errorCode` `REQUEST_TIMEOUT`.
+- **Removed `gincommon.ErrorResponse`.** Clients decode `problem.Problem` with `problem.FromResponse`.
+- **Gin's plain-text 404 (and 405 with `HandleMethodNotAllowed`)** for unregistered routes is now a `platform/not-found` (`ROUTE_NOT_FOUND`) / `platform/method-not-allowed` problem, for every engine that `r.Use`s `ObservabilityMiddlewares`.
+
+### Added
+
+- **`pkg/problem`**, the platform's RFC 9457 contract for Go. It uses the standard library only, so gateways, BFFs and clients can use it without Gin.
+  - `Problem`, `FieldError`.
+  - The error type registry: 15 `platform/*` types, `MustType` for domain types, `TypeForStatus`, `TypeURI`, `DefaultTypeBase = https://errors.company.com`. It is documented in `docs/problem-details/registry.md`.
+  - `*Error` with the `New*Error` constructors that map the specification's exception classes. A cause is kept for `errors.Is`/`As` and never sent.
+  - `FromError` (the global exception mapping).
+  - `Builder` (an `internal-error` never carries a detail).
+  - `ResolveTraceID` (`traceparent` → sanitized `x-request-id` → span → generated). It follows platform-pgcommon-py's order and passes its test vectors.
+  - `FromResponse` / `Decode` for clients.
+  - `OpenAPIComponents()` (the shared `ProblemDetails` schema and the 400/401/403/404/409/422/429/500 responses) and `StandardResponses()`.
+- **Global error handler**, the innermost `ObservabilityMiddlewares` handler. It renders the last `c.Error(err)` and any bodiless error status as a problem, after the handlers return. It never touches a written response. `context.Canceled` is recorded as 499 without a body.
+- **`gincommon.AbortWithProblem(c, err)`, `ClassifyError(err)`, `BindingError(err)`, `ShouldBindJSON(c, obj)`, `ShouldBind(c, obj)`.**
+  - Validator failures become `validationErrors` with JSON field paths (`items[0].sku`) and fixed messages (`is required`, `must be at least 3 characters`, ...). The rejected value is never echoed.
+  - Empty and malformed bodies get fixed details; `*http.MaxBytesError` is 413.
+  - Gin's default validator reports `json` / `form` tag names once the error handler is built.
+- **`Config.ProblemTypeBase`**: the type URI base (default `https://errors.company.com`).
+- **Problem logging**: each problem is logged once at WARN as `problem response`, with `traceId`, `type`, `status`, `errorCode`, `service`, `tenantId`. These are the names and the level platform-pgcommon-py uses. The entry never contains the detail, the instance, headers or the identity.
+- `tenantId` is set only from the verified `RequestContext` (never on a 401), and `instance` never includes the query string.
+- **Docs**: `docs/problem-details/` (the contract, exception mapping, validation, trace correlation, logging, security, gateway/Envoy/BFF rules, OpenAPI, clients, migration) and the error type registry.
+- **CI smoke gate**: the demo image must answer an unknown route with a `platform/not-found` problem.
+- Tests:
+  - `test/unit/problem`: registry invariants and doc drift, builder, mapping, trace vectors, client decoding, OpenAPI schema vs struct.
+  - `test/unit/gincommon/errors_test.go`: the full stack, covering status mapping, validation, no leaks, tenant and trace.
+  - `test/integration/problem_details_test.go`: gateway passthrough through a reverse proxy, a gateway-generated problem, and client parsing.
 
 ## [1.6.0] - 2026-10-03
 
@@ -267,7 +307,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Breaking:** the sampler is always `ParentBased`. With a ratio ≥ 1 or ≤ 0 it used to ignore the parent's decision.
   - **Breaking:** `InitTracingFromEnv` has no library default service name any more. It reads `OTEL_SERVICE_NAME`, then `APP_NAME`. When neither is set it warns on stderr and exports as `unknown_service`, and the provider is provisional: the first `ObservabilityMiddlewares`/gRPC interceptor stack (or `EnsureTracing` with a name) replaces it with the configured `ServiceName`. `InitTracing`/`EnsureTracing` with an empty service behave the same way.
   - **Breaking:** `gincommon.EnsureInitTelemetry` was removed (now unexported). Its parameter type was internal, so consumers could not call it. Use `EnsureTracing`, `InitTracingWithConfig` or `ObservabilityMiddlewares`.
-  - `go.mod` now declares `go 1.26.0` and `toolchain go1.26.6`, so the module no longer forces consumers onto Go 1.26.6. CI still builds with 1.26.6 because `setup-go` uses `go-version-file`, which prefers `toolchain`.
+  - `go.mod` now declares `go 1.26.0` and `toolchain go1.26.9`, so the module no longer forces consumers onto Go 1.26.9. CI still builds with 1.26.9 because `setup-go` uses `go-version-file`, which prefers `toolchain`.
   - CI: every GitHub Action is pinned to a full commit SHA with a `# vX.Y.Z` comment. The `platform-interop-tests` reusable workflow is pinned to a `main` commit SHA (that repo has no tags yet). The pin moved to `c7e62e6`: the interop Go probe was updated for v1.4.0 (it sets an observability identity and forwards identity explicitly to its peer), which fixes the four pair-2 interop failures on PR #30.
   - `.golangci.yml` moves from the v1 `issues.exclude-rules` to the v2 `linters.exclusions.rules` (`golangci-lint config verify` now passes), and `make lint` runs `config verify` before linting.
   - Boolean `OTEL_*` env vars are parsed case-insensitively. An unrecognised value warns once on stderr and falls back to the default.
@@ -321,7 +361,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Security:** Bumped `go.mod`'s `go` directive and the Docker builder base image to `1.26.6`, clearing 2 `govulncheck` findings in the standard library: GO-2026-6067 (`crypto/tls`) and GO-2026-5972 (`encoding/asn1`, recursion depth).
+- **Security:** Bumped `go.mod`'s `go` directive and the Docker builder base image to `1.26.9`, clearing 2 `govulncheck` findings in the standard library: GO-2026-6067 (`crypto/tls`) and GO-2026-5972 (`encoding/asn1`, recursion depth).
 
 ### Changed
 

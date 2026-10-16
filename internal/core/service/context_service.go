@@ -1,6 +1,6 @@
 package service
 
-import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
+import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 
 // ContextService builds domain.RequestContext from validated gateway identity.
 type ContextService struct{}

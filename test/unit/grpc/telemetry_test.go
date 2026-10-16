@@ -3,7 +3,7 @@ package grpc_test
 import (
 	"testing"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/grpccommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/grpccommon"
 )
 
 // TestObservabilityInterceptors_WithTracingOverrides exercises resolveGRPCTelemetry's

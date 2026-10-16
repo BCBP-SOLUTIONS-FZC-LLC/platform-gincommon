@@ -5,8 +5,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 
-	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/server"
+	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/otel"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/server"
 )
 
 func TestSetup_InitializesTracerProviderWithoutExporter(t *testing.T) {

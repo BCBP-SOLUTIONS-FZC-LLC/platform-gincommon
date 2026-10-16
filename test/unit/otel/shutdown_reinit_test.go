@@ -6,7 +6,7 @@ import (
 
 	gootel "go.opentelemetry.io/otel"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/otel"
 )
 
 // A provider captured between Shutdown and the next Init (e.g. an otelgrpc

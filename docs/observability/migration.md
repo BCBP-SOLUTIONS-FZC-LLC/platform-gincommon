@@ -40,7 +40,7 @@ There is no parallel-emission phase, so do this in the same change that bumps gi
 1. **Set the identity.** Set `Config.Domain` (or `OBSERVABILITY_DOMAIN`, e.g. in the Helm values), and make sure the environment resolves (`Config.Environment`, else `APP_ENV`, else `ENVIRONMENT`) to one of `local, dev, test, staging, prod`. `production` is rejected. The service will not start without a valid domain.
 2. **Find every reference.** Run `metricslint refs` over everything that queries metrics: dashboards, alert rules, recording rules, SLO definitions, HPA / prometheus-adapter config, release health gates, runbooks. Every hit is an error naming the replacement:
    ```bash
-   go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/cmd/metricslint@vX.Y.Z refs deploy/ .github/ dashboards/
+   go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/cmd/metricslint@vX.Y.Z refs deploy/ .github/ dashboards/
    # deploy/hpa.yaml:14: error: legacy metric http_active_requests was removed and is no longer emitted; use platform_http_active_requests
    ```
 3. **Rewrite the queries** with the table above. When a query groups by `method` on a gRPC metric, change it to `grpc_method`. Remove `version` from selectors and groupings except on `platform_build_info`. Remove `{service="..."}`-only assumptions where the series now also carry `domain` and `environment` (selectors still match; groupings may need them).

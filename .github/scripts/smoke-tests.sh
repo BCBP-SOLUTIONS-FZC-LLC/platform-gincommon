@@ -63,12 +63,22 @@ for want in \
     exit 1
   fi
 done
+# RFC 9457: an unregistered route is a platform/not-found problem, not Gin's text 404.
+problem_body=$(mktemp)
+problem_status=$(curl -sS -o "${problem_body}" -w '%{http_code} %{content_type}' \
+  "http://127.0.0.1:${PORT}/no-such-route")
+if [ "${problem_status}" != "404 application/problem+json" ] \
+  || ! grep -qF '"type":"https://errors.company.com/platform/not-found"' "${problem_body}"; then
+  echo "::error title=Problem Details::unknown route answered '${problem_status}': $(cat "${problem_body}")"
+  exit 1
+fi
 echo "::endgroup::"
 
 {
   echo "### Smoke test results"
   echo "- ✅ Startup gate: invalid OBSERVABILITY_DOMAIN exits ${exit_code}"
   echo "- ✅ /health ok; /metrics exposes platform_build_info and platform_http_requests_total with domain/service/environment"
+  echo "- ✅ Unknown route answers an RFC 9457 platform/not-found problem (application/problem+json)"
   echo "- 📦 Image size (linux/amd64): **${mb} MB** (limit: ${MAX_MB} MB)"
   echo "- 🔍 [Security (Trivy SARIF results)](https://github.com/${GITHUB_REPOSITORY:-}/security/code-scanning)"
 } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

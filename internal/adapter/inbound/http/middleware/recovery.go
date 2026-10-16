@@ -8,17 +8,18 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/problem"
 	"github.com/gin-gonic/gin"
 )
 
 // PanicRecoveryMiddleware recovers panics after the inner middleware (metrics, logging,
 // tracing) has recorded them, logs the panic with trace/request correlation, and returns
-// a JSON 500 error response.
+// a 500 internal-error problem (application/problem+json, no detail).
 //
-//   - If the handler had already started writing the response, no JSON body is
+//   - If the handler had already started writing the response, no problem body is
 //     appended (it would corrupt the partial response); the request is only aborted.
 //   - http.ErrAbortHandler is re-panicked after being logged at Debug level without a
 //     stack, so net/http aborts the connection silently as it documents (it is the
@@ -91,11 +92,7 @@ func PanicRecoveryMiddleware(logger port.Logger) gin.HandlerFunc {
 			// Written even when the handler called c.Abort() before panicking:
 			// otherwise the client would get Gin's default 200 while metrics, logs
 			// and the span all record 500.
-			writeJSONError(
-				c,
-				http.StatusInternalServerError,
-				ErrInternal,
-			)
+			WriteProblem(c, problem.NewInternalError(nil))
 		}()
 
 		c.Next()

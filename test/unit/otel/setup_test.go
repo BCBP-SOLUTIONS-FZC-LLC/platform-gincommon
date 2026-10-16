@@ -6,7 +6,7 @@ import (
 
 	gootel "go.opentelemetry.io/otel"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/otel"
 )
 
 func TestInit_InvalidEndpointStillSetsTracerProvider(t *testing.T) {

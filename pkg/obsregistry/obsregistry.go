@@ -15,7 +15,7 @@
 //	}
 //
 // The same checks run against a live scrape with
-// go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/cmd/metricslint check -url ....
+// go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/cmd/metricslint check -url ....
 package obsregistry
 
 import (
@@ -24,7 +24,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/obsregistry"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/obsregistry"
 )
 
 // Registry is a parsed registry document.

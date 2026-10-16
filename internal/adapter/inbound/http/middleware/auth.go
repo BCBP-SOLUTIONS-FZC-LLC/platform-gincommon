@@ -3,10 +3,11 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/problem"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,7 +20,7 @@ func RequireAuth(logger port.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h, ambiguous := ambiguousIdentityHeader(c); ambiguous {
 			logAuthRejection(c, logger, "ambiguous "+h+" header")
-			writeJSONError(c, http.StatusUnauthorized, "ambiguous "+h+" header")
+			WriteProblem(c, problem.NewUnauthorizedError(ambiguousDetail(h)))
 			return
 		}
 		userID, okUser := domain.NormalizeHeaderValue(c.GetHeader(domain.HeaderUserID))
@@ -30,13 +31,21 @@ func RequireAuth(logger port.Logger) gin.HandlerFunc {
 				reason = "missing or invalid " + domain.HeaderUserID
 			}
 			logAuthRejection(c, logger, reason)
-			writeJSONError(c, http.StatusUnauthorized, "missing or invalid authentication headers")
+			WriteProblem(c, problem.NewUnauthorizedError(DetailMissingIdentity))
 			return
 		}
 		c.Set(domain.HeaderUserID, userID)
 		c.Set(domain.HeaderTenantID, tenantID)
 		c.Next()
 	}
+}
+
+// ambiguousDetail is the 401 detail for a repeated identity header h.
+func ambiguousDetail(h string) string {
+	if h == domain.HeaderTenantID {
+		return DetailAmbiguousTenantID
+	}
+	return DetailAmbiguousUserID
 }
 
 // logAuthRejection emits the 401 audit entry. Header values are client input: they are

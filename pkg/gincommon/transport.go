@@ -1,6 +1,6 @@
 package gincommon
 
-import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
+import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 
 // Request transport headers (set by a trusted gateway; validated by ProtectedMiddlewares).
 const (

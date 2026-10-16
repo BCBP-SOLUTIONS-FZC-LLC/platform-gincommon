@@ -7,8 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/http/middleware"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/test/fixtures"
 )
 
 func TestCorrelationHeadersMiddleware_SetsHeadersOnSuccess(t *testing.T) {
@@ -61,17 +62,20 @@ func TestWriteJSONError_ViaRecovery_IncludesCorrelationFields(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 
-	body, err := fixtures.DecodeErrorJSON(w.Body.Bytes())
+	body, err := fixtures.DecodeProblem(w.Body.Bytes())
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Error != "internal server error" {
-		t.Fatalf("error = %q", body.Error)
+	if !fixtures.IsProblemType(body.Type, problem.TypeInternalError) || body.Detail != "" {
+		t.Fatalf("problem = %+v, want internal-error without detail", body)
 	}
 	if body.Status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", body.Status, http.StatusInternalServerError)
 	}
-	if body.RequestID == "" {
-		t.Fatal("request_id missing from body")
+	if body.TraceID == "" {
+		t.Fatal("traceId missing from body")
+	}
+	if w.Result().Header.Get("X-Request-Id") == "" {
+		t.Fatal("X-Request-Id response header missing")
 	}
 }

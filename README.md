@@ -4,7 +4,7 @@ The platform's shared **Gin HTTP and gRPC middleware library**: the transport-la
 
 **Repository:** `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon`
 **Module:** `go 1.26.0` directive · `toolchain go1.26.9` · private module · **never deployed** — consumers import `pkg/`; `cmd/server` is a reference/demo binary and the CI image is a demo image, not a production artefact
-**Design:** Clean Architecture (`domain ← port ← service ← adapter ← pkg`); the observability contract is [`docs/observability/`](docs/observability/README.md) and the registry rendered at [`docs/observability/metric-registry.md`](docs/observability/metric-registry.md). The registry imports platform-events' and platform-pgcommon's released registries verbatim — where they conflict, their released contract wins. Release `v1.4.0` ships breaking changes as a MINOR — a [recorded exception](VERSIONING.md#recorded-exceptions) (nothing had been deployed; every consumer upgrades in lockstep).
+**Design:** Clean Architecture (`domain ← port ← service ← adapter ← pkg`); the observability contract is [`docs/observability/`](docs/observability/README.md) and the registry rendered at [`docs/observability/metric-registry.md`](docs/observability/metric-registry.md). The registry imports platform-events' and platform-pgcommon's released registries verbatim — where they conflict, their released contract wins. Every HTTP error is an [RFC 9457](docs/problem-details/README.md) problem (`application/problem+json`). Release `v2.0.0` moves the module to `.../platform-gincommon/v2` for that breaking change; `v1.4.0` shipped earlier breaking changes as a MINOR — a [recorded exception](VERSIONING.md#recorded-exceptions).
 
 ---
 
@@ -43,24 +43,36 @@ This is enforced structurally: the `core/` layers never import `adapter/` or fra
 
 ## API overview
 
-Four public packages and one CLI. Source of truth: `go doc ./pkg/<name>`; the tables below are the stable surface covered by SemVer ([VERSIONING.md](VERSIONING.md)). `internal/*`, `cmd/server` and `test/*` are not.
+Five public packages and one CLI. Source of truth: `go doc ./pkg/<name>`; the tables below are the stable surface covered by SemVer ([VERSIONING.md](VERSIONING.md)). `internal/*`, `cmd/server` and `test/*` are not.
 
-**Default HTTP chain:** `gincommon.DefaultMiddlewares` = `ObservabilityMiddlewares` (`PanicRecovery → RequestID → Tracing → CorrelationHeaders → Metrics → Logging → [Timeout when Config.RequestTimeout > 0]`) + `ProtectedMiddlewares` (`RequireAuth → ContextMiddleware`). **Default gRPC chain:** `grpccommon.FullUnaryInterceptors` = `recovery → request ID → tracing → metrics → logging → auth → context` (logging wraps auth, so rejected calls are logged).
+**Default HTTP chain:** `gincommon.DefaultMiddlewares` = `ObservabilityMiddlewares` (`PanicRecovery → RequestID → Tracing → CorrelationHeaders → Metrics → Logging → [Timeout when Config.RequestTimeout > 0] → error handler`) + `ProtectedMiddlewares` (`RequireAuth → ContextMiddleware`). **Default gRPC chain:** `grpccommon.FullUnaryInterceptors` = `recovery → request ID → tracing → metrics → logging → auth → context` (logging wraps auth, so rejected calls are logged).
 
 ### `pkg/gincommon` — HTTP services
 
 | Group | Symbols | Purpose |
 |---|---|---|
-| Configuration | `Config{Logger, ServiceName, BuildVersion, Domain, Environment, Tracing, RequestTimeout}`, `TracingOptions{Endpoint, Insecure, SampleRatio, EnableBaggage, IgnoreRemoteParentSampled}` | `ServiceName` and `Domain` (or `OBSERVABILITY_DOMAIN`) required — missing or invalid identity panics at startup |
+| Configuration | `Config{Logger, ServiceName, BuildVersion, Domain, Environment, Tracing, RequestTimeout, ProblemTypeBase}`, `TracingOptions{Endpoint, Insecure, SampleRatio, EnableBaggage, IgnoreRemoteParentSampled}` | `ServiceName` and `Domain` (or `OBSERVABILITY_DOMAIN`) required — missing or invalid identity panics at startup |
 | Middleware stacks | `ObservabilityMiddlewares`, `ProtectedMiddlewares`, `DefaultMiddlewares`, `TimeoutMiddleware(d)` | The chains above; 401s are audit-logged to `cfg.Logger` |
 | Health | `HealthHandler()` | `200 {"status":"ok"}`; register before `ProtectedMiddlewares` |
 | Authorization | `RequirePermission(action, resource, auth)`, `RequirePermissionWithLogger(...)`, `NewDemoRBAC()`, `Authorizer`, `DemoRBAC`, `ErrForbidden` | Per-route RBAC; `Authorize(ctx, rc, action, resource) error` — `nil` allows, `ErrForbidden` denies (403), other errors → 500 |
 | Request context | `RequestContext(c)`, `RequestContextData`, `RequestIDFromContext(c)`, `TraceIDFromContext(c)`, `Header*` constants | Verified identity and correlation IDs in handlers |
 | Outbound | `PropagateHeaders(c, req)`, `PropagateIdentityHeaders(c, req)`, `InjectTraceContext(ctx, header)` | Trace + request ID to any destination; identity only to trusted internal services |
-| Errors | `ErrorResponse{Error, Status, TraceID, RequestID}` | Unmarshal any platform 4xx/5xx body |
+| Errors | `AbortWithProblem(c, err)`, `ClassifyError(err)`, `BindingError(err)`, `ShouldBindJSON(c, obj)`, `ShouldBind(c, obj)` | RFC 9457 problems; `c.Error(err)` + `return` is rendered by the global error handler in `ObservabilityMiddlewares` |
 | Tracing | `InitTracingWithConfig(TracingConfig)`, `InitTracing`, `EnsureTracing`, `InitTracingFromEnv`, `Shutdown(logger)`, `NewTracer`, `NoopTracer`, `NewSpanTracer`, `SpanTraceID`, `RecordSpanError`, `Tracer`/`Span` | Tracing outside handlers with no OpenTelemetry import; `NewSpanTracer` is pgcommon's `Config.Tracer` hook |
 | Metrics | `MetricsHandler()`, `MetricsGatherer()`, `MetricsRegisterer()`, `MetricsConstLabels()`, `LabeledRegisterer(reg)`, `NewShared{Counter,Gauge,Histogram}Vec(reg, name)`, `New{CounterVec,Counter,GaugeVec,Gauge,HistogramVec}` + type aliases | Tier 1/2 from the registry; Tier 3 validated; no Prometheus import |
 | Logging | `Logger` | The structured-logging port `Config.Logger` takes |
+
+### `pkg/problem` — RFC 9457 Problem Details (stdlib only)
+
+| Group | Symbols | Purpose |
+|---|---|---|
+| Model | `Problem`, `FieldError`, `ContentType`, `FormatTimestamp` | The platform error body: `type`, `title`, `status`, `detail`, `instance` + `traceId`, `errorCode`, `tenantId`, `timestamp`, `validationErrors` |
+| Registry | `Type`, `Type*` (15 platform types), `PlatformTypes()`, `NewType`/`MustType`, `TypeForStatus`, `TypeURI`, `DefaultTypeBase` | `{base}/{domain}/{error}` URIs — see [registry.md](docs/problem-details/registry.md) |
+| Errors | `Error`, `NewError`, `NewValidationError`, `NewBadRequestError`, `NewUnauthorizedError`, `NewForbiddenError`, `NewNotFoundError`, `NewConflictError`, `NewBusinessRuleError`, `NewRateLimitError`, `NewNotImplementedError`, `NewServiceUnavailableError`, `NewInternalError`, `FromError` | What handlers return; a cause is kept for `errors.Is`/`As` and never sent |
+| Builder | `Builder`, `NewBuilder(t)`, `BuilderFor(err)` | Gateways/BFFs building their own problems; strips any detail from `internal-error` |
+| Correlation | `ResolveTraceID`, `TraceIDFromTraceparent`, `SanitizeRequestID`, `NewTraceID` | `traceparent` → `x-request-id` → span → generated (platform-pgcommon-py's order) |
+| Clients | `FromResponse(resp)`, `Decode(r)`, `IsProblemContentType`, `ErrNotProblem` | Parse problems; branch on `Status`/`Type`/`ErrorCode`, never on text |
+| OpenAPI | `OpenAPIComponents()`, `StandardResponses()` | Shared `ProblemDetails` schema and the 400/401/403/404/409/422/429/500 responses |
 
 ### `pkg/grpccommon` — gRPC services
 
@@ -99,14 +111,19 @@ Exit codes: `0` clean, `1` findings, `2` usage or I/O error. Release builds atta
 
 ## Input validation
 
-Every rejection the library produces is the flat envelope below, with `X-Trace-ID` / `X-Request-ID` response headers set. Internal error detail is never sent to the client — it goes to the sanitized log entry only.
+Every rejection the library produces is an RFC 9457 problem (`application/problem+json`), with `X-Trace-ID` / `X-Request-ID` response headers set. Internal error detail is never sent to the client: a 5xx `internal-error` has no `detail`, and the cause goes to the sanitized log entry only. Full contract: [docs/problem-details](docs/problem-details/README.md).
 
 ```json
 {
-  "error": "forbidden",
+  "type": "https://errors.company.com/platform/forbidden",
+  "title": "Forbidden",
   "status": 403,
-  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
-  "request_id": "b1a2c3d4-e5f6-7890-abcd-1234567890ef"
+  "detail": "The identity is not allowed to perform this operation.",
+  "instance": "/api/items/42",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "errorCode": "FORBIDDEN",
+  "tenantId": "tenant-001",
+  "timestamp": "2026-10-15T10:45:22Z"
 }
 ```
 
@@ -116,7 +133,7 @@ Every rejection the library produces is the flat envelope below, with `X-Trace-I
 |---|---|
 | `x-user-id` / `x-tenant-id` required on protected routes | Non-empty after trim, ≤256 bytes, no control characters → else `401` / `codes.Unauthenticated` with a warn `auth: request rejected` audit entry |
 | Repeated identity headers are ambiguous | More than one `x-user-id` or `x-tenant-id` value → `401 ambiguous ...` (HTTP) / `Unauthenticated "ambiguous <key> metadata"` (gRPC) — a gateway that appends rather than replaces can never let a client value win |
-| Roles are bounded and validated | Repeated `x-tenant-roles` values are joined; tokens must match `[a-zA-Z0-9_-]+` (≤64 chars, invalid tokens dropped), deduplicated; a header over 4096 bytes or with more than 64 roles → `401 invalid tenant roles` |
+| Roles are bounded and validated | Repeated `x-tenant-roles` values are joined; tokens must match `[a-zA-Z0-9_-]+` (≤64 chars, invalid tokens dropped), deduplicated; a header over 4096 bytes or with more than 64 roles → `401` (`Invalid tenant roles.`) |
 | `x-request-id` is reused only when valid | `[A-Za-z0-9._-]`, ≤128 chars, else a new UUID is generated and used consistently for logs, spans and propagation |
 | Unverified identity is never logged as verified | `tenant_id`/`user_id` in `http_request` come only from the built `RequestContext`; client-supplied values on public or rejected routes appear as `claimed_tenant_id`/`claimed_user_id` |
 | Metric labels cannot explode | HTTP `route` is the Gin template or `unknown` (never the raw path); non-standard methods → `OTHER`; gRPC method names outside `^/[A-Za-z0-9_.]+/[A-Za-z0-9_]+$`, over 256 bytes, or (after `RegisterKnownMethods`) unregistered → `unknown` |
@@ -212,7 +229,7 @@ This is a **private module**:
 
 ```bash
 export GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*
-go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@v1.4.0
+go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@v2.0.0
 ```
 
 Go 1.26+ (the `go 1.26.0` directive does not force consumers onto 1.26.9). Pin a tag — never `@latest`. Requests must arrive through the trusted API gateway, which authenticates the caller and injects `x-user-id`/`x-tenant-id`/`x-tenant-roles`; the service must not be reachable around the gateway.
@@ -254,8 +271,8 @@ import (
 
     "github.com/gin-gonic/gin"
 
-    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
-    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/logger"
+    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
+    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
 )
 
 func main() {
@@ -346,10 +363,8 @@ func listItemsHandler(c *gin.Context) {
     // RequestContext is populated by ContextMiddleware on protected routes.
     rc, ok := gincommon.RequestContext(c)
     if !ok {
-        c.JSON(http.StatusInternalServerError, gincommon.ErrorResponse{
-            Error:  "missing request context",
-            Status: http.StatusInternalServerError,
-        })
+        // Rendered by the global error handler as a 500 internal-error problem.
+        _ = c.Error(errors.New("request context missing"))
         return
     }
     // rc.TenantID, rc.UserID, rc.Roles, rc.TraceID, rc.ClientIP all available.
@@ -381,8 +396,8 @@ import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
 
-    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/grpccommon"
-    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/logger"
+    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/grpccommon"
+    "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
 
     // your generated pb package:
     pb "github.com/your-org/your-service/gen/pb"
@@ -547,25 +562,53 @@ Call constructors **after** the middleware/interceptor constructor ran (before i
 | `RecordSpanError(ctx, err, description)` | Record an error on the current span and mark it failed |
 | `logger.Default()` | A process-wide logger for paths never handed one |
 
-### 8. Handling errors from other platform services
+### 8. Returning and handling errors
 
-Every platform 4xx/5xx body is `ErrorResponse`:
+Handlers report errors with `c.Error(err)` + `return`, or `gincommon.AbortWithProblem(c, err)` to stop the chain now; the global error handler in `ObservabilityMiddlewares` renders them as problems. Bind with `gincommon.ShouldBindJSON` so validation failures become `validationErrors`:
 
 ```go
-var errResp gincommon.ErrorResponse
-if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
-    log.Printf("error: %s  trace_id: %s  request_id: %s",
-        errResp.Error, errResp.TraceID, errResp.RequestID)
+var TenderNotFound = problem.MustType("tender", "not-found", "Tender not found", 404, "TENDER_NOT_FOUND")
+
+func getTender(c *gin.Context) {
+    t, err := repo.Get(c.Request.Context(), c.Param("id"))
+    if errors.Is(err, store.ErrNotFound) {
+        _ = c.Error(problem.NewError(TenderNotFound, "Tender "+c.Param("id")+" was not found."))
+        return
+    }
+    if err != nil {
+        _ = c.Error(err) // 500 internal-error, no detail
+        return
+    }
+    c.JSON(http.StatusOK, t)
 }
 ```
 
-Use `trace_id` to find the distributed trace in Tempo and `request_id` to find the specific service's log line.
+Every platform 4xx/5xx from another service is a problem:
+
+```go
+if p, err := problem.FromResponse(resp); err == nil {
+    log.Printf("upstream %d %s %s traceId=%s", p.Status, p.Type, p.ErrorCode, p.TraceID)
+}
+```
+
+Branch on `Status`, `Type` and `ErrorCode`, never on `Title`/`Detail` text. Use `traceId` to find the trace in Tempo and the `problem response` log line. Mapping table, validation, gateway behaviour and OpenAPI: [docs/problem-details](docs/problem-details/README.md).
 
 ### 9. Rate limits
 
 The library implements no request rate limiter — throttling belongs to the gateway/mesh. `MetricsMiddleware` *observes* `429` responses (`platform_http_rate_limited_requests_total`) and logs at most one warn per route per second, with a `suppressed` count.
 
-### 10. Upgrading to v1.4.0
+### 10. Upgrading to v2.0.0
+
+v2.0.0 replaces the error contract and moves the module path (full detail: `[2.0.0]` in [CHANGELOG.md](CHANGELOG.md) and the [migration table](docs/problem-details/README.md#migrating-from-v1x)):
+
+- [ ] **Change the module path.** `go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@v2.0.0` and rewrite every import to `.../platform-gincommon/v2/pkg/...`.
+- [ ] **Stop writing error bodies by hand.** Replace `c.JSON(4xx/5xx, ...)`, `c.AbortWithStatusJSON`, `c.AbortWithError`, `c.BindJSON` and `gincommon.ErrorResponse` with `c.Error` + `return`, `gincommon.AbortWithProblem` or `gincommon.ShouldBindJSON`.
+- [ ] **Define domain error types** with `problem.MustType` and register them in [registry.md](docs/problem-details/registry.md).
+- [ ] **Update clients** that decoded `error` / `trace_id` / `request_id` to `problem.FromResponse` (the request id stays in the `X-Request-ID` header).
+- [ ] **Update OpenAPI documents** to reference the shared `ProblemDetails` schema for 400, 401, 403, 404, 409, 422, 429 and 500 with `application/problem+json`.
+- [ ] **Check gateways** pass `application/problem+json` through unchanged.
+
+### 11. Upgrading to v1.4.0
 
 v1.4.0 breaks the v1.x API as a [recorded exception](VERSIONING.md#recorded-exceptions). Do not let `go get -u` pull it in without these steps (full detail: `[1.4.0]` in [CHANGELOG.md](CHANGELOG.md) and the [metric name mapping](docs/observability/migration.md)):
 

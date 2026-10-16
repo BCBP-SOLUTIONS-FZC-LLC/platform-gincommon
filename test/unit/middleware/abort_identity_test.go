@@ -13,11 +13,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.opentelemetry.io/otel/codes"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/http/middleware"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/test/fixtures"
 )
 
 // serveExpectingAbort serves req and returns the value that escaped ServeHTTP.
@@ -179,9 +180,10 @@ func TestRequireAuth_RepeatedIdentityHeader_Rejected(t *testing.T) {
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", w.Code)
 			}
-			body, err := fixtures.DecodeErrorJSON(w.Body.Bytes())
-			if err != nil || body.Error != "ambiguous "+h+" header" {
-				t.Fatalf("body = %+v (%v), want ambiguous %s header", body, err, h)
+			body, err := fixtures.DecodeProblem(w.Body.Bytes())
+			want := "Ambiguous " + h + " header."
+			if err != nil || body.Detail != want || !fixtures.IsProblemType(body.Type, problem.TypeUnauthorized) {
+				t.Fatalf("body = %+v (%v), want unauthorized %q", body, err, want)
 			}
 			if e := logger.byMsg("auth: request rejected"); len(e) != 1 || e[0].Fields["reason"] != "ambiguous "+h+" header" {
 				t.Fatalf("audit log = %+v", e)
@@ -199,8 +201,8 @@ func TestContextMiddleware_RepeatedIdentityHeader_Rejected(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
-	if body, _ := fixtures.DecodeErrorJSON(w.Body.Bytes()); body.Error != "ambiguous x-tenant-id header" {
-		t.Fatalf("error = %q", body.Error)
+	if body, _ := fixtures.DecodeProblem(w.Body.Bytes()); body.Detail != "Ambiguous x-tenant-id header." {
+		t.Fatalf("detail = %q", body.Detail)
 	}
 }
 
@@ -279,8 +281,10 @@ func TestContextMiddleware_BuilderError_400WithAuditLog(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
-	if body, _ := fixtures.DecodeErrorJSON(w.Body.Bytes()); body.Error != "invalid request context" {
-		t.Fatalf("client error = %q, builder detail must not leak", body.Error)
+	body, _ := fixtures.DecodeProblem(w.Body.Bytes())
+	if body.Detail != "Invalid request context." || body.ErrorCode != "INVALID_REQUEST_CONTEXT" ||
+		!fixtures.IsProblemType(body.Type, problem.TypeBadRequest) {
+		t.Fatalf("problem = %+v, builder detail must not leak", body)
 	}
 	e := logger.byMsg("context: request rejected")
 	if len(e) != 1 || e[0].Level != "warn" || e[0].Fields["status"] != http.StatusBadRequest {

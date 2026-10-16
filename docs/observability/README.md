@@ -120,9 +120,9 @@ Each gincommon release attaches prebuilt `metricslint` binaries (linux/darwin am
 
 ```bash
 # Dashboards, alerts, recording rules, SLOs, HPA manifests, runbooks:
-go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/cmd/metricslint@vX.Y.Z refs deploy/ dashboards/
+go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/cmd/metricslint@vX.Y.Z refs deploy/ dashboards/
 # Live scrape, e.g. in an e2e job:
-go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/cmd/metricslint@vX.Y.Z check -url http://localhost:8080/metrics
+go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/cmd/metricslint@vX.Y.Z check -url http://localhost:8080/metrics
 ```
 
 `metricslint` exit codes: **0** compliant, **1** findings (for `registry`: the document is readable but violates the standard), **2** usage or I/O error (bad flags, `-url` together with files, a missing or unreadable file, a failed scrape). `check` accepts the Prometheus text format and OpenMetrics text (recognized by its `# EOF` line; timestamps, exemplars, `# UNIT` and `_created` samples are ignored, `unknown` families are treated as untyped). `refs` walks directories recursively, skipping `.git`, `node_modules` and `vendor` (unless named explicitly). A path it cannot read, inside a walked directory or named on the command line, and any file over 64 MiB, is reported as an error finding and the scan continues; once every finding is printed the exit code is **2** (I/O error) rather than 1.

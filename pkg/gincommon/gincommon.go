@@ -5,12 +5,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/config"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/http/middleware"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/otel"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
 )
 
 // Config configures the default middleware stacks for a Gin service.
@@ -44,6 +44,11 @@ type Config struct {
 	// server span record the same 503 the client receives on a timeout. Zero or
 	// negative disables it. See TimeoutMiddleware for the semantics.
 	RequestTimeout time.Duration
+	// ProblemTypeBase is the base of every problem type URI
+	// ({base}/{domain}/{error}); empty means problem.DefaultTypeBase
+	// (https://errors.company.com). Use the organisation's error registry host,
+	// the same in every service.
+	ProblemTypeBase string
 }
 
 // TracingOptions overrides OpenTelemetry settings for ObservabilityMiddlewares.
@@ -70,8 +75,11 @@ type TracingOptions struct {
 // ServiceName, Domain and Environment (a different identity is a configuration error
 // reported by metrics initialization, not silently ignored).
 //
-// Order: PanicRecovery, RequestID, Tracing, CorrelationHeaders, Metrics, Logging and,
-// when cfg.RequestTimeout > 0, Timeout (innermost).
+// Order: PanicRecovery, RequestID, Tracing, CorrelationHeaders, Metrics, Logging,
+// Timeout (only when cfg.RequestTimeout > 0) and the global error handler
+// (innermost). The error handler renders every handler error (c.Error) and every
+// bodiless error status, including Gin's 404/405 for unregistered routes, as an
+// RFC 9457 problem; see AbortWithProblem.
 func ObservabilityMiddlewares(cfg Config) []gin.HandlerFunc {
 	if cfg.ServiceName == "" {
 		panic("gincommon.Config.ServiceName is required")
@@ -101,7 +109,7 @@ func ObservabilityMiddlewares(cfg Config) []gin.HandlerFunc {
 	if cfg.RequestTimeout > 0 {
 		mw = append(mw, middleware.TimeoutMiddleware(cfg.RequestTimeout))
 	}
-	return mw
+	return append(mw, middleware.ProblemMiddleware(problemSettings(cfg)))
 }
 
 // ProtectedMiddlewares returns auth and tenant context middleware: RequireAuth then
@@ -125,8 +133,8 @@ func DefaultMiddlewares(cfg Config) []gin.HandlerFunc {
 // TimeoutMiddleware sets a per-request context deadline. Zero or negative is a no-op.
 //
 // When the deadline expires (context.DeadlineExceeded; a client disconnect is not a
-// timeout) and the handler returned without writing a response, it writes a 503 JSON
-// ErrorResponse and increments platform_http_request_timeouts_total. It does not
+// timeout) and the handler returned without writing a response, it writes a 503
+// service-unavailable problem (errorCode REQUEST_TIMEOUT) and increments platform_http_request_timeouts_total. It does not
 // interrupt the handler goroutine: handlers must honour c.Request.Context() (pass it to
 // DB and HTTP calls) for the deadline to have any effect.
 //
@@ -136,6 +144,14 @@ func DefaultMiddlewares(cfg Config) []gin.HandlerFunc {
 // only an inner TimeoutMiddleware's 503 is what metrics, logs and spans record.
 func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 	return middleware.TimeoutMiddleware(timeout)
+}
+
+func problemSettings(cfg Config) middleware.ProblemSettings {
+	return middleware.ProblemSettings{
+		TypeBase: cfg.ProblemTypeBase,
+		Logger:   cfg.Logger,
+		Service:  cfg.ServiceName,
+	}
 }
 
 func resolveTelemetry(cfg Config) otel.TelemetryConfig {

@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
