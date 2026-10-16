@@ -12,10 +12,12 @@ import (
 	gootel "go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/logger"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/logger"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/test/fixtures"
 )
 
 func TestNewDemoRBAC(t *testing.T) {
@@ -124,11 +126,11 @@ func TestDefaultMiddlewares_IncrementsHttpPanicTotal(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body["error"] != "internal server error" {
-		t.Fatalf("error = %v", body["error"])
+	if typ, _ := body["type"].(string); !fixtures.IsProblemType(typ, problem.TypeInternalError) {
+		t.Fatalf("type = %v", body["type"])
 	}
-	if body["request_id"] == nil || body["request_id"] == "" {
-		t.Fatalf("request_id = %v, want non-empty in panic response", body["request_id"])
+	if body["traceId"] == nil || body["traceId"] == "" {
+		t.Fatalf("traceId = %v, want non-empty in panic response", body["traceId"])
 	}
 	if w.Header().Get("X-Request-Id") == "" {
 		t.Fatal("expected X-Request-Id on panic response")

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/logger"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/logger"
 )
 
 func TestNewLogger_LogFile(t *testing.T) {

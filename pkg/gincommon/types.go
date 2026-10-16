@@ -1,9 +1,9 @@
 package gincommon
 
 import (
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
 )
 
 // Public aliases for the core types that appear in this package's signatures, so a

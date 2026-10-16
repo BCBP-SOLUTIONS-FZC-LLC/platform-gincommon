@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 )
 
 // RBACService is a reference Authorizer for demos and tests. Production services should

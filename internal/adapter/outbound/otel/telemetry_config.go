@@ -1,6 +1,6 @@
 package otel
 
-import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
+import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
 
 // TelemetryConfig controls OTLP export, sampling, resource identity and
 // propagation for InitTelemetry / EnsureInitTelemetry.

@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/config"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/server"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/server"
 )
 
 func main() {

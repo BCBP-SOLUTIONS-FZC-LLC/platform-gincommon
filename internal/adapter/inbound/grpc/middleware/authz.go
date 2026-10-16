@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

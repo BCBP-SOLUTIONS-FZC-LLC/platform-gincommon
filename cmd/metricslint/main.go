@@ -3,13 +3,13 @@
 // Observability Registry and scans dashboards, alert and recording rules,
 // SLOs and HPA manifests for legacy or unregistered metric names.
 //
-//	go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/cmd/metricslint@<version> check -url http://localhost:8080/metrics
+//	go run github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/cmd/metricslint@<version> check -url http://localhost:8080/metrics
 package main
 
 import (
 	"os"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/obsregistry"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/obsregistry"
 )
 
 func main() {

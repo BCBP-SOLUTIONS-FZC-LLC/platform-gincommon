@@ -4,9 +4,10 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/problem"
 	"github.com/gin-gonic/gin"
 )
 
@@ -24,29 +25,29 @@ func ContextMiddleware(ctxSvc port.ContextBuilder, logger port.Logger) gin.Handl
 	return func(c *gin.Context) {
 		// Any rejection below means no RequestContext is built: flag it so the access
 		// log keeps the identity RequireAuth accepted under claimed_* names.
-		reject := func(status int, reason, msg string) {
+		reject := func(reason string, perr *problem.Error) {
 			c.Set(ctxIdentityRejectedKey, true)
-			if status == http.StatusUnauthorized {
+			if perr.Status() == http.StatusUnauthorized {
 				logAuthRejection(c, logger, reason)
 			} else {
-				logContextRejection(c, logger, status, reason)
+				logContextRejection(c, logger, perr.Status(), reason)
 			}
-			writeJSONError(c, status, msg)
+			WriteProblem(c, perr)
 		}
 
 		if h, ambiguous := ambiguousIdentityHeader(c); ambiguous {
-			reject(http.StatusUnauthorized, "ambiguous "+h+" header", "ambiguous "+h+" header")
+			reject("ambiguous "+h+" header", problem.NewUnauthorizedError(ambiguousDetail(h)))
 			return
 		}
 		userID, tenantID, ok := identityFromRequest(c)
 		if !ok {
-			reject(http.StatusUnauthorized, "missing or invalid authentication headers", "missing or invalid authentication headers")
+			reject("missing or invalid authentication headers", problem.NewUnauthorizedError(DetailMissingIdentity))
 			return
 		}
 
 		roles, err := domain.ParseRolesStrict(rolesHeader(c))
 		if err != nil {
-			reject(http.StatusUnauthorized, "invalid "+domain.HeaderTenantRoles, "invalid tenant roles")
+			reject("invalid "+domain.HeaderTenantRoles, problem.NewUnauthorizedError(DetailInvalidRoles))
 			return
 		}
 
@@ -60,12 +61,13 @@ func ContextMiddleware(ctxSvc port.ContextBuilder, logger port.Logger) gin.Handl
 		if err != nil {
 			switch {
 			case errors.Is(err, domain.ErrMissingTenant):
-				reject(http.StatusUnauthorized, "missing tenant id", "missing tenant id")
+				reject("missing tenant id", problem.NewUnauthorizedError(DetailMissingTenant))
 			case errors.Is(err, domain.ErrMissingUser):
-				reject(http.StatusUnauthorized, "missing user id", "missing user id")
+				reject("missing user id", problem.NewUnauthorizedError(DetailMissingUser))
 			default:
 				// The builder's error text is logged (sanitized) but never sent to the client.
-				reject(http.StatusBadRequest, "invalid request context: "+err.Error(), "invalid request context")
+				reject("invalid request context: "+err.Error(),
+					problem.NewBadRequestError(DetailInvalidContext).WithCode(CodeInvalidRequestContext).WithCause(err))
 			}
 			return
 		}

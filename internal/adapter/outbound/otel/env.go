@@ -3,8 +3,8 @@ package otel
 import (
 	"strings"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/config"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
 )
 
 // EnvConfig returns a TelemetryConfig populated from the OTEL_* environment

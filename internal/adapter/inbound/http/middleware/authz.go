@@ -2,23 +2,17 @@ package middleware
 
 import (
 	"errors"
-	"net/http"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/problem"
 	"github.com/gin-gonic/gin"
 )
 
-// JSON error message constants returned by AuthZMiddleware.
-const (
-	ErrCtxMissing = "request context missing"
-	ErrCtxInvalid = "invalid request context"
-	ErrForbidden  = "forbidden"
-	ErrInternal   = "internal server error"
-)
-
 // AuthZMiddleware authorizes the request using requestContext (requires ContextMiddleware).
+// A denial is a 403 forbidden problem; a missing context, a missing Authorizer or an
+// Authorizer error is a 500 internal-error problem without detail (the cause is logged).
 // Pass a non-nil logger to emit audit log entries for denials; pass nil to skip logging.
 func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -30,7 +24,7 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 					"action": action, "resource": resource,
 				})
 			}
-			writeJSONError(c, http.StatusInternalServerError, ErrCtxMissing)
+			WriteProblem(c, problem.NewInternalError(nil))
 			return
 		}
 
@@ -41,12 +35,17 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 					"action": action, "resource": resource,
 				})
 			}
-			writeJSONError(c, http.StatusInternalServerError, ErrCtxInvalid)
+			WriteProblem(c, problem.NewInternalError(nil))
 			return
 		}
 
 		if auth == nil {
-			writeJSONError(c, http.StatusInternalServerError, ErrInternal)
+			if logger != nil {
+				logger.Error("authz: no authorizer configured", map[string]any{
+					"action": action, "resource": resource,
+				})
+			}
+			WriteProblem(c, problem.NewInternalError(nil))
 			return
 		}
 		if err := auth.Authorize(c.Request.Context(), ctx, action, resource); err != nil {
@@ -60,7 +59,7 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 						"resource":  resource,
 					})
 				}
-				writeJSONError(c, http.StatusForbidden, ErrForbidden)
+				WriteProblem(c, problem.NewForbiddenError(DetailForbidden).WithCause(err))
 				return
 			}
 			if logger != nil {
@@ -72,7 +71,7 @@ func AuthZMiddleware(auth port.Authorizer, action, resource string, logger port.
 					"error":     service.SanitizeString(err.Error()),
 				})
 			}
-			writeJSONError(c, http.StatusInternalServerError, ErrInternal)
+			WriteProblem(c, problem.NewInternalError(err))
 			return
 		}
 		c.Next()

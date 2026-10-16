@@ -6,8 +6,8 @@
 |---|---|
 | Document type | Low-Level Design (LLD) |
 | Component | `platform-gincommon` (shared Gin HTTP + gRPC transport and observability library) |
-| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon` (`go 1.26.0`, `toolchain go1.26.9`) |
-| Status | `v1.4.0` released 2026-10-02 — `make ci` and PR #30 CI green, coverage 98.9% |
+| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` (`go 1.26.0`, `toolchain go1.26.9`) |
+| Status | `v2.0.0` (unreleased): RFC 9457 Problem Details error contract, `/v2` module path. Latest release `v1.6.0` (2026-10-03) |
 | Previous release | `v1.3.0` (pinned by all 11 IAM services today) |
 | Governing standard | Enterprise Platform Observability Standard ([`docs/observability/README.md`](../observability/README.md)) |
 | Base HLD | IAM HLD — shared library dependencies (§15.4), Clean Architecture layout (§15.3) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 1.6 | 2026-10-16 | **RFC 9457 Problem Details (v2.0.0).** Every HTTP error is `application/problem+json` (§4.3). New `pkg/problem` (stdlib-only model, type registry, builder, error types, trace-id resolution, client decoder, OpenAPI components). The global error handler `ProblemMiddleware` is the innermost `ObservabilityMiddlewares` handler. `gincommon.ErrorResponse` was removed. The module path is now `/v2`. Full contract: `docs/problem-details/`. |
 | 1.5 | 2026-10-02 | **LLD-vs-code verification.** Three independent claim-by-claim checks against the code. ~45 document corrections (log field names, sanitisation scope, context-error statuses, gRPC check order, catalogue gaps, release/CI details, consumer usage). Six code gaps found; five fixed: gRPC authz logs carry `tenant_id`; `PropagateIdentityHeaders` removes a stale `x-tenant-roles`; gRPC span panic values are sanitized; every HTTP 500 body is `internal server error`; an empty `RegisterKnownMethods` no longer maps every method to `unknown`. The sixth (OTel error-logger downgrade) is recorded as OQ-22. New open items OQ-18–23, including OQ-18: all 11 services register `TimeoutMiddleware` outermost. |
 | 1.4 | 2026-10-02 | **Production-readiness review 3 fixes.** Panic after a partial write now aborts the connection (bare `http.ErrAbortHandler`), so the client never sees a complete 200 (§8.6). A wrapped `ErrAbortHandler` is re-panicked as the bare sentinel, because net/http compares by identity. An established `unknown` build version is upgraded by a later real version, so startup no longer depends on whether HTTP or gRPC is built first (§6.2). Tracing `Shutdown` keeps the delegating provider installed (§6.3). The gRPC alias is renamed `RequestContextData` to match gincommon (§5.3). gRPC timeout interceptors are documented and tested as **innermost** (§8.8). |
 | 1.3 | 2026-10-01 | **Production-readiness review 2 fixes.** `pkg/` aliases so consumers can implement `Authorizer` without `internal/` (§5.3). Exact-match gRPC health exemption, which closed a prefix-match auth bypass (§10.1, SEC-6). `ErrAbortHandler` became a 499 client abort in every layer. HTTP rejects repeated identity headers, matching gRPC. The delegating global `TracerProvider` replaced global swaps (§6.3). The stream timeout runs the handler in a goroutine. `BUILD_VERSION` is sanitised instead of rejected. Canonical `CANCELLED` status name. `metricslint refs` returns exit 2 on I/O errors, with a 64 MiB per-file cap. Rate-limited `/metrics` error log + `promhttp_metric_handler_errors_total`. |
@@ -146,7 +147,7 @@ platform-gincommon/
 │   │   ├── metrics.go / metrics_api.go    # MetricsRegisterer/ConstLabels/Handler/Gatherer, NewShared*Vec, New*Vec, LabeledRegisterer, Registerer/Gatherer/Counter*/Gauge*/HistogramVec aliases
 │   │   ├── propagate.go                   # PropagateHeaders, PropagateIdentityHeaders
 │   │   ├── authz.go / context.go          # RequirePermission*, RequestContext, TraceIDFromContext, RequestIDFromContext
-│   │   ├── health.go / errors.go          # HealthHandler, ErrorResponse
+│   │   ├── health.go / errors.go          # HealthHandler, AbortWithProblem / ClassifyError / BindingError
 │   │   ├── transport.go                   # Header* constants
 │   │   └── types.go                       # aliases: Authorizer, RequestContextData, Logger, DemoRBAC, ErrForbidden
 │   ├── grpccommon/
@@ -276,7 +277,7 @@ Limits (`internal/core/domain/transport.go`): `MaxHeaderValueLen = 256`, `MaxRol
 { "error": "forbidden", "status": 403, "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "request_id": "b1a2c3d4-e5f6-7890-abcd-1234567890ef" }
 ```
 
-`gincommon.ErrorResponse{Error, Status, TraceID, RequestID}`. Every library-produced HTTP rejection uses it and sets `X-Trace-ID` / `X-Request-ID` before writing. `error` is a fixed, human-readable string (§17), never internal error detail.
+Since v2.0.0: an RFC 9457 problem, `pkg/problem.Problem` (`type`, `title`, `status`, `detail`, `instance`, `traceId`, `errorCode`, `tenantId`, `timestamp`, `validationErrors`), served as `application/problem+json`. Every library-produced HTTP rejection goes through `middleware.WriteProblem`, which sets `X-Trace-ID` / `X-Request-ID` before writing. `detail` is a fixed sentence (§17), never internal error detail, and is absent on `internal-error`. Contract: `docs/problem-details/README.md`.
 
 ### 4.4 Registry document (`internal/obsregistry/registry.json`)
 
@@ -347,7 +348,7 @@ Key label vocabularies:
 | G-5 | `func DefaultMiddlewares(cfg Config) []gin.HandlerFunc` | G-3 + G-4 |
 | G-6 | `func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc` | §8.7; `≤ 0` is a no-op |
 | G-7 | `func HealthHandler() gin.HandlerFunc` | `200 {"status":"ok"}` |
-| G-8 | `type ErrorResponse struct{ Error string; Status int; TraceID, RequestID string }` | §4.3 |
+| G-8 | `AbortWithProblem(c, err)`, `ClassifyError(err)`, `BindingError(err)`, `ShouldBindJSON(c, obj)`, `ShouldBind(c, obj)`; problems are `pkg/problem.Problem` | §4.3 |
 | G-9 | `func PropagateHeaders(c *gin.Context, req *http.Request)` | Sets `traceparent`/`tracestate` + `x-request-id`. No identity, no baggage. Nil `c`/`req` → no-op; nil `req.Header` allocated |
 | G-10 | `func PropagateIdentityHeaders(c *gin.Context, req *http.Request)` | G-9 + `x-user-id`/`x-tenant-id`/`x-tenant-roles` from the `RequestContext` (set, not appended; a pre-existing `x-tenant-roles` is removed when the caller has no roles) + full propagator output (baggage) |
 | G-11 | `func RequirePermission(action, resource string, auth Authorizer) gin.HandlerFunc` | §8.4, no logging |
@@ -1130,7 +1131,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 
 ### 17.1 HTTP responses (library-produced)
 
-All use `ErrorResponse` (§4.3).
+All are RFC 9457 problems (§4.3).
 
 | HTTP | `error` | Produced by | Cause |
 |---|---|---|---|

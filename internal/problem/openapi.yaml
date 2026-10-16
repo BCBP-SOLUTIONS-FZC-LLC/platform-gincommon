@@ -1,0 +1,127 @@
+# Shared OpenAPI 3.1 components for RFC 9457 Problem Details (platform error contract).
+# Copy or $ref these into every service's OpenAPI document; every endpoint declares
+# the 400, 401, 403, 404, 409, 422, 429 and 500 responses below.
+#
+#   responses:
+#     "404":
+#       $ref: "#/components/responses/NotFound"
+#
+# Source: platform-gincommon pkg/problem (problem.OpenAPIComponents). Do not edit a
+# service copy; regenerate it from the library version the service pins.
+components:
+  schemas:
+    ProblemDetails:
+      type: object
+      description: RFC 9457 problem details with the platform extensions.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Stable type URI, https://errors.company.com/{domain}/{error}, or about:blank.
+          example: https://errors.company.com/platform/not-found
+        title:
+          type: string
+          description: Fixed summary of the problem type.
+          example: Not Found
+        status:
+          type: integer
+          format: int32
+          minimum: 400
+          maximum: 599
+          description: HTTP status code of this response.
+          example: 404
+        detail:
+          type: string
+          description: Occurrence-specific explanation. Absent on 5xx internal errors.
+          example: Tender 123 was not found.
+        instance:
+          type: string
+          format: uri-reference
+          description: Request path of the occurrence.
+          example: /api/tenders/123
+        traceId:
+          type: string
+          description: Correlation id for logs and traces (W3C trace-id or x-request-id).
+          example: 4bf92f3577b34da6a3ce929d0e0e4736
+        errorCode:
+          type: string
+          pattern: "^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$"
+          description: Stable machine-readable error code.
+          example: TENDER_NOT_FOUND
+        tenantId:
+          type: string
+          description: Tenant of the verified request context, when there is one.
+          example: tenant-001
+        timestamp:
+          type: string
+          format: date-time
+          description: When the problem was created (RFC 3339, UTC).
+          example: "2026-10-15T10:45:22Z"
+        validationErrors:
+          type: array
+          description: Invalid fields of a validation-failed problem.
+          items:
+            $ref: "#/components/schemas/ValidationError"
+      additionalProperties: true
+    ValidationError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: JSON path of the invalid field.
+          example: deadline
+        message:
+          type: string
+          description: Fixed message; never the rejected value.
+          example: must be in the future
+  responses:
+    BadRequest:
+      description: The request is malformed or failed validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    Unauthorized:
+      description: The request has no valid identity.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    Forbidden:
+      description: The identity may not perform this operation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    NotFound:
+      description: Resource not found.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    Conflict:
+      description: The request conflicts with the current state of the resource.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    UnprocessableEntity:
+      description: A business rule rejected the request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    InternalServerError:
+      description: Unexpected server error.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"

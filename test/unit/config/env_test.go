@@ -3,7 +3,7 @@ package config_test
 import (
 	"testing"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/config"
 )
 
 func TestGetenvHelpers(t *testing.T) {

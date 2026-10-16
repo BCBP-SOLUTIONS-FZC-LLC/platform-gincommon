@@ -9,8 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/test/fixtures"
 )
 
 // levelLogger records every entry's level and message (fixtures.MockLogger keeps the last).
@@ -115,8 +115,8 @@ func TestProtectedMiddlewares_RepeatedIdentityHeader401(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
-	if body, _ := fixtures.DecodeErrorJSON(w.Body.Bytes()); body.Error != "ambiguous x-user-id header" {
-		t.Fatalf("error = %q", body.Error)
+	if body, _ := fixtures.DecodeProblem(w.Body.Bytes()); body.Detail != "Ambiguous x-user-id header." {
+		t.Fatalf("detail = %q", body.Detail)
 	}
 }
 

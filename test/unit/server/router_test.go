@@ -3,16 +3,16 @@ package server_test
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/logger"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/server"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/logger"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/server"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/test/fixtures"
 )
 
 func TestNewRouter_Health(t *testing.T) {
@@ -90,25 +90,22 @@ func TestNewRouter_Panic_Returns500WithCorrelation(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
-	if ct := w.Result().Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
-		t.Fatalf("Content-Type = %q, want JSON", ct)
+	if ct := w.Result().Header.Get("Content-Type"); ct != problem.ContentType {
+		t.Fatalf("Content-Type = %q, want %s", ct, problem.ContentType)
 	}
 
-	body, err := fixtures.DecodeErrorJSON(w.Body.Bytes())
+	body, err := fixtures.DecodeProblem(w.Body.Bytes())
 	if err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.Error != "internal server error" {
-		t.Fatalf("error = %q", body.Error)
+	if !fixtures.IsProblemType(body.Type, problem.TypeInternalError) || body.Detail != "" {
+		t.Fatalf("problem = %+v, want internal-error without detail", body)
 	}
 	if body.Status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", body.Status, http.StatusInternalServerError)
 	}
-	if body.RequestID == "" {
-		t.Fatal("expected non-empty request_id in body")
-	}
-	if body.RequestID != w.Result().Header.Get("X-Request-Id") {
-		t.Fatalf("body request_id %q != header %q", body.RequestID, w.Result().Header.Get("X-Request-Id"))
+	if w.Result().Header.Get("X-Request-Id") == "" {
+		t.Fatal("expected X-Request-Id response header")
 	}
 	if body.TraceID == "" || body.TraceID == "00000000000000000000000000000000" {
 		t.Fatalf("trace_id = %q, want non-zero OTel trace ID", body.TraceID)

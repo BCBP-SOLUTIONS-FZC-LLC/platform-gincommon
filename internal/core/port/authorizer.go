@@ -3,7 +3,7 @@ package port
 import (
 	"context"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 )
 
 // Authorizer performs route-level authorization for the caller described by rc.

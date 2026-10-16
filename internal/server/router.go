@@ -6,9 +6,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/config"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/pkg/gincommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 )
 
 // DemoRequestTimeout is the per-request deadline the demo router sets through
@@ -23,6 +23,9 @@ func NewRouter(log port.Logger, serviceName string) *gin.Engine {
 	// Disable X-Forwarded-For trust so c.ClientIP() always returns the real remote address.
 	// Consumers behind a trusted proxy should call r.SetTrustedProxies with their proxy CIDRs.
 	_ = r.SetTrustedProxies(nil)
+	// Answer a known path with the wrong method as a 405 method-not-allowed problem
+	// (Gin's default is a 404).
+	r.HandleMethodNotAllowed = true
 
 	// Domain/Environment come from OBSERVABILITY_DOMAIN / APP_ENV, so the demo
 	// emits platform_* metrics when OBSERVABILITY_DOMAIN is set in .env.

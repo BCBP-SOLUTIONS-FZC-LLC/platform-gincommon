@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/label"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/problem"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,7 +20,8 @@ import (
 // returns, so handlers must honour c.Request.Context() for the timeout to take effect.
 // When the deadline expired (context.DeadlineExceeded — a client disconnect,
 // context.Canceled, is not a timeout) and the handler returned without writing a
-// response, it writes a 503 JSON error and increments the timeout counter. A response
+// response, it writes a 503 service-unavailable problem (errorCode REQUEST_TIMEOUT)
+// and increments the timeout counter. A response
 // the handler already wrote is left untouched, and so is one whose status the handler
 // set without a body (e.g. c.Status(http.StatusNoContent)): see responseStarted.
 //
@@ -40,7 +42,7 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 		c.Next()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) && !responseStarted(c) {
 			metrics.RecordHTTPTimeout(c.Request.Method, label.HTTPRoute(c))
-			writeJSONError(c, http.StatusServiceUnavailable, "request timeout")
+			WriteProblem(c, problem.FromError(ctx.Err()))
 		}
 	}
 }

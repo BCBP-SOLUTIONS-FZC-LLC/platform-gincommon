@@ -3,7 +3,6 @@ package middleware_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -23,11 +22,11 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/http/middleware"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/test/fixtures"
 )
 
 // logEntry / recordingLogger capture every call (fixtures.MockLogger keeps only the last).
@@ -574,12 +573,9 @@ func TestContextMiddleware_TooManyRoles_401AndLogged(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
-	var body struct {
-		Error string `json:"error"`
-	}
-	_ = json.Unmarshal(w.Body.Bytes(), &body)
-	if body.Error != "invalid tenant roles" {
-		t.Fatalf("error = %q", body.Error)
+	body, _ := fixtures.DecodeProblem(w.Body.Bytes())
+	if body.Detail != "Invalid tenant roles." {
+		t.Fatalf("detail = %q", body.Detail)
 	}
 	if logger.Fields["reason"] != "invalid x-tenant-roles" {
 		t.Fatalf("audit reason = %v", logger.Fields["reason"])

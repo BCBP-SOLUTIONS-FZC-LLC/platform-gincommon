@@ -2,7 +2,7 @@
 
 This document describes the internal structure, dependency rules, and runtime flows of `platform-gincommon`.
 
-`platform-gincommon` is a **private Go module** (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon`, `go 1.26.0` directive, `toolchain go1.26.9`) imported by every IAM Go service. It owns the platform's **transport layer**: the HTTP middleware and gRPC interceptor chains that recover panics, correlate requests, trace, log, emit metrics, validate gateway identity, build tenant context and authorize calls. It is also the Go home of the **Enterprise Platform Observability Standard**: the central registry (`internal/obsregistry/registry.json`), the `platform_*` collectors built from it, and `metricslint`. It is **never deployed**. Consumers import `pkg/`; `cmd/server` is a reference binary whose image exists only for CI smoke tests. Release `v1.4.0` ships breaking changes as a MINOR, a [recorded exception](VERSIONING.md#recorded-exceptions): nothing had been deployed and every consumer upgrades in lockstep.
+`platform-gincommon` is a **private Go module** (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2`, `go 1.26.0` directive, `toolchain go1.26.9`) imported by every IAM Go service. It owns the platform's **transport layer**: the HTTP middleware and gRPC interceptor chains that recover panics, correlate requests, trace, log, emit metrics, validate gateway identity, build tenant context and authorize calls. It is also the Go home of the **Enterprise Platform Observability Standard**: the central registry (`internal/obsregistry/registry.json`), the `platform_*` collectors built from it, and `metricslint`. It owns the Go side of the platform's **error contract**: RFC 9457 Problem Details (`pkg/problem`, rendered by the global error handler at the end of `ObservabilityMiddlewares`; see [docs/problem-details](docs/problem-details/README.md)). It is **never deployed**. Consumers import `pkg/`; `cmd/server` is a reference binary whose image exists only for CI smoke tests. Release `v2.0.0` replaced the error contract with RFC 9457 and moved the module path to `/v2`; `v1.4.0` shipped earlier breaking changes as a MINOR, a [recorded exception](VERSIONING.md#recorded-exceptions).
 
 **Does not own:** authentication (JWT/OAuth/API keys are validated by the API gateway; this library trusts gateway-injected headers at the network layer); business authorization policy (each service implements `Authorizer`, and `NewDemoRBAC` is reference-only); database access, pooling and RLS (platform-pgcommon); outbox, SNS/SQS and schema registry (platform-events, platform-schemagov); messaging and DB metric *emission* (platform-events / platform-pgcommon emit their own series, which this registry governs); rate limiting, retries and circuit breaking (gateway / mesh); the production collector, Tempo, Prometheus, Loki and Grafana (the `docker-compose.yml` stack is local-only); ratifying `proposed` metrics (observability governance; this repo records their decisions).
 
@@ -202,7 +202,7 @@ flowchart TD
     C -- no --> D["metrics.MustInitFromConfig<br/>ApplyEnvDefaults → resolve → InitWithOptions<br/>same identity: no-op · unknown version inherits/upgrades<br/>different identity: panic ErrIdentityMismatch"]
     D --> E["resolve telemetry: cfg.Tracing over OTEL_* env<br/>+ Domain / Environment for the trace resource"]
     E --> F["ensureInitTelemetry<br/>install when no provider or only a provisional one<br/>else keep it (upgrade its error logger)"]
-    F --> G["return [<br/>PanicRecovery(logger)<br/>RequestID<br/>Tracing(ServiceName)<br/>CorrelationHeaders<br/>Metrics(logger)<br/>Logging(logger)<br/>+ Timeout(RequestTimeout) when > 0  — innermost<br/>]"]
+    F --> G["return [<br/>PanicRecovery(logger)<br/>RequestID<br/>Tracing(ServiceName)<br/>CorrelationHeaders<br/>Metrics(logger)<br/>Logging(logger)<br/>+ Timeout(RequestTimeout) when > 0<br/>+ ProblemMiddleware (global error handler) — innermost<br/>]"]
 
     B -- "ProtectedMiddlewares(cfg)" --> H["service.NewContextService()"]
     H --> I["return [<br/>RequireAuth(logger)<br/>ContextMiddleware(ctxSvc, logger)<br/>]"]
@@ -269,7 +269,7 @@ sequenceDiagram
     else identity valid
         AU ->>+ CM: c.Next()
         alt x-tenant-roles over 4096 bytes or 64 roles
-            CM -->> AU: 401 invalid tenant roles (identity logged as claimed_*)
+            CM -->> AU: 401 unauthorized problem (identity logged as claimed_*)
         else ok
             Note over CM: RequestContext{UserID, TenantID, Roles, TraceID, ClientIP}
             CM ->>+ H: c.Next()
@@ -280,7 +280,7 @@ sequenceDiagram
     AU -->>- TO: return
     alt deadline exceeded and nothing written / status still 200
         Note over TO: platform_http_request_timeouts_total +1
-        TO -->> LO: 503 request timeout
+        TO -->> LO: 503 problem (service-unavailable, REQUEST_TIMEOUT)
     end
     TO -->>- LO: return
 
@@ -462,18 +462,18 @@ sequenceDiagram
     else no RequestContext in context (RequirePermission placed before Protected*)
         AZ -->> Chain: HTTP 500 · gRPC FailedPrecondition<br/>"request context missing — ensure ProtectedUnaryInterceptors ran first"
     else authorizer is nil
-        AZ -->> Chain: 500 / codes.Internal "internal server error"
+        AZ -->> Chain: 500 internal-error problem / codes.Internal "internal server error"
     else RequestContext present
         AZ ->>+ A: Authorize(ctx, rc, action, resource)
         Note over A: ctx carries deadline, cancellation, trace span<br/>rc carries TenantID, UserID, Roles — tenant-scoped policy
         alt error wraps ErrForbidden
             A -->> AZ: ErrForbidden
             Note over AZ: warn "authz: access denied"<br/>{tenant_id, user_id, roles, action, resource}
-            AZ -->> Chain: 403 / codes.PermissionDenied "forbidden"
+            AZ -->> Chain: 403 forbidden problem / codes.PermissionDenied "forbidden"
         else any other error
             A -->> AZ: err
             Note over AZ: error "authz: internal error" (sanitized)<br/>detail never sent to the client
-            AZ -->> Chain: 500 / codes.Internal "internal server error"
+            AZ -->> Chain: 500 internal-error problem / codes.Internal "internal server error"
         else nil
             A -->>- AZ: nil
             AZ ->>+ H: next
@@ -570,7 +570,7 @@ flowchart TD
         H4 -- no --> H9(["return — handler's response stands"])
         H4 -- yes --> H5{"response written, or status changed from 200?<br/>(e.g. c.Status(204) after the deadline)"}
         H5 -- yes --> H9
-        H5 -- no --> H6["platform_http_request_timeouts_total +1<br/>503 request timeout JSON"]
+        H5 -- no --> H6["platform_http_request_timeouts_total +1<br/>503 service-unavailable problem"]
         H6 --> H7(["Metrics / Logging / Tracing are OUTSIDE it:<br/>they record the same 503 the client receives"])
     end
 
@@ -970,6 +970,10 @@ There is no background goroutine of the library's own beyond the OTel batch span
 | `duration_ms` is sub-millisecond precise | `float64(elapsed.Nanoseconds()) / 1e6` in every request and panic log |
 | Typed-nil safety | `RequestContext(c)`, `RequestContextFromGoContext`, `ProtoMessageSize` guard typed-nil pointers |
 | Consumers never import `internal/` | `pkg/*/types.go` aliases; `consumer_api_test.go` |
+| Every HTTP error is an RFC 9457 problem | `WriteProblem` is the only error writer; `ProblemMiddleware` renders `c.Error` and bodiless error statuses (incl. Gin's 404/405); `application/problem+json` |
+| A 5xx never leaks internal detail | unclassified errors → `internal-error`; `Builder.Build` strips `detail`/`validationErrors` from `internal-error` |
+| `tenantId` only from verified identity | `WriteProblem` reads the built `RequestContext`, never a header; absent on 401 |
+| `traceId` resolves like platform-pgcommon-py | `problem.ResolveTraceID`: `traceparent` → sanitized `x-request-id` → span → generated; shared test vectors |
 
 ---
 
@@ -987,7 +991,7 @@ Two-stage `Dockerfile`: digest-pinned `golang:1.26.9-alpine` builder, digest-pin
 
 ### Versioning
 
-SemVer over `pkg/*` ([VERSIONING.md](VERSIONING.md)). `v1.4.0` is a recorded exception (breaking changes in a MINOR). A release requires a `## [X.Y.Z]` CHANGELOG section and a tag that points at HEAD and is reachable from `origin/main`.
+SemVer over `pkg/*` ([VERSIONING.md](VERSIONING.md)). `v2.0.0` (RFC 9457 error contract) is a proper major with the `/v2` module path. `v1.4.0` is a recorded exception (breaking changes in a MINOR). A release requires a `## [X.Y.Z]` CHANGELOG section and a tag that points at HEAD and is reachable from `origin/main`.
 
 ---
 
@@ -1006,7 +1010,7 @@ Tests live in `test/`, a separate package tree, so coverage is measured with `-c
 
 ## Consumer conformance checklist
 
-Before a service ships on `v1.4.0`, verify:
+Before a service ships on `v2.x`, verify:
 
 **Identity and configuration**
 - [ ] `Config.Domain` (or `OBSERVABILITY_DOMAIN`) is a registry domain; `Environment` / `APP_ENV` is one of `local|dev|test|staging|prod`.
@@ -1023,6 +1027,11 @@ Before a service ships on `v1.4.0`, verify:
 - [ ] `RequirePermission*` is after the protected chain.
 - [ ] HTTP uses `Config.RequestTimeout`, not an outermost `TimeoutMiddleware`; gRPC timeout interceptors are appended after `Full*`.
 - [ ] gRPC servers call `RegisterKnownMethods(srv)` after all services are registered.
+
+**Errors (RFC 9457)**
+- [ ] Handlers report errors with `c.Error` + `return`, `gincommon.AbortWithProblem` or `gincommon.ShouldBind*`; no hand-written error bodies, `c.AbortWithStatus*`, `c.AbortWithError` or `c.BindJSON`.
+- [ ] Domain error types are `problem.MustType` variables registered in `docs/problem-details/registry.md`.
+- [ ] The OpenAPI document references the shared `ProblemDetails` schema for 400, 401, 403, 404, 409, 422, 429 and 500.
 
 **Authorization and metrics**
 - [ ] The production `Authorizer` returns `ErrForbidden` for denials and honours `ctx`.

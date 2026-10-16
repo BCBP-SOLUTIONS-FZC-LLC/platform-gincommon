@@ -21,13 +21,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/inbound/http/middleware"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/metrics"
-	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/adapter/outbound/otel"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/domain"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/port"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/core/service"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/test/fixtures"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/http/middleware"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
+	otelsetup "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/otel"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/test/fixtures"
 )
 
 type errAuthorizer struct{}
@@ -145,14 +146,17 @@ func TestPanicRecoveryMiddleware_RecordsPanicAndReturns500(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body["error"] != "internal server error" {
-		t.Fatalf("error = %v", body["error"])
+	if typ, _ := body["type"].(string); !fixtures.IsProblemType(typ, problem.TypeInternalError) {
+		t.Fatalf("type = %v", body["type"])
+	}
+	if _, ok := body["detail"]; ok {
+		t.Fatalf("detail = %v, a 500 must not carry one", body["detail"])
 	}
 	if status, ok := body["status"].(float64); !ok || int(status) != http.StatusInternalServerError {
 		t.Fatalf("status = %v, want %d", body["status"], http.StatusInternalServerError)
 	}
-	if body["request_id"] == "" || body["request_id"] == nil {
-		t.Fatalf("request_id = %v, want non-empty", body["request_id"])
+	if body["traceId"] == "" || body["traceId"] == nil {
+		t.Fatalf("traceId = %v, want non-empty", body["traceId"])
 	}
 	if w.Result().Header.Get("X-Request-Id") == "" {
 		t.Fatal("expected X-Request-Id response header")
@@ -190,8 +194,8 @@ func TestPanicRecoveryMiddleware_NilLogger_ReturnsJSON500(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
-	if ct := w.Result().Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
-		t.Fatalf("Content-Type = %q, want JSON", ct)
+	if ct := w.Result().Header.Get("Content-Type"); ct != problem.ContentType {
+		t.Fatalf("Content-Type = %q, want %s", ct, problem.ContentType)
 	}
 }
 
@@ -207,15 +211,17 @@ func TestPanicRecoveryMiddleware_CorrelationHeadersMatchBody(t *testing.T) {
 	r.GET("/panic", func(c *gin.Context) { panic("boom") })
 
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	req.Header.Set("X-Request-Id", "req-123")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	body, err := fixtures.DecodeErrorJSON(w.Body.Bytes())
+	body, err := fixtures.DecodeProblem(w.Body.Bytes())
 	if err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.RequestID != w.Result().Header.Get("X-Request-Id") {
-		t.Fatalf("body request_id %q != header %q", body.RequestID, w.Result().Header.Get("X-Request-Id"))
+	// Without traceparent, the client's x-request-id is the traceId.
+	if body.TraceID != "req-123" || w.Result().Header.Get("X-Request-Id") != "req-123" {
+		t.Fatalf("body traceId %q, header %q, want req-123", body.TraceID, w.Result().Header.Get("X-Request-Id"))
 	}
 	if body.Status != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", body.Status, http.StatusInternalServerError)
@@ -244,7 +250,7 @@ func TestPanicRecoveryMiddleware_WithTracing_IncludesTraceIDInResponseAndLog(t *
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
 
-	body, err := fixtures.DecodeErrorJSON(w.Body.Bytes())
+	body, err := fixtures.DecodeProblem(w.Body.Bytes())
 	if err != nil {
 		t.Fatalf("decode body: %v", err)
 	}

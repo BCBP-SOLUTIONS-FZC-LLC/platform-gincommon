@@ -36,7 +36,7 @@ fi
   cat release-notes.md
   echo ""
   echo "---"
-  echo "**Go module:** \`go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@${RELEASE_TAG}\`"
+  echo "**Go module:** \`go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@${RELEASE_TAG}\`"
   echo "**metricslint:** binaries attached below (\`sha256sum --check checksums.txt\`)"
   echo "**Demo image (reference only, not a production artefact):** \`${IMAGE_NAME}:${IMAGE_VERSION}\`"
   echo "**Digest:** \`${IMAGE_DIGEST}\`"

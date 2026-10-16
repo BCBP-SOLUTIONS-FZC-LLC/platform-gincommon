@@ -32,7 +32,7 @@ Provide a clear description of the changes.
 
 ### Observability (IMPORTANT for your system)
 - [ ] Logs include `trace_id` / `request_id`
-- [ ] Errors use `writeJSONError`
+- [ ] Errors are RFC 9457 problems (`c.Error` / `gincommon.AbortWithProblem` / `middleware.WriteProblem`)
 - [ ] Middleware patterns followed
 
 ---

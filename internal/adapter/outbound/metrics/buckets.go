@@ -1,6 +1,6 @@
 package metrics
 
-import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/internal/obsregistry"
+import "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/obsregistry"
 
 // RequestDurationBuckets are the registry's request_duration preset (seconds),
 // tuned for IAM-style workloads: fast authn/authz and token checks (1–50ms),
