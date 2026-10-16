@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Component | `platform-gincommon` (shared Gin HTTP + gRPC transport and observability library) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` (`go 1.26.0`, `toolchain go1.26.9`) |
-| Status | `v2.0.0` (unreleased): RFC 9457 Problem Details error contract, `/v2` module path. Latest release `v1.6.0` (2026-10-03) |
+| Status | `v2.0.0` released 2026-10-16: RFC 9457 Problem Details error contract, `/v2` module path |
 | Previous release | `v1.3.0` (pinned by all 11 IAM services today) |
 | Governing standard | Enterprise Platform Observability Standard ([`docs/observability/README.md`](../observability/README.md)) |
 | Base HLD | IAM HLD — shared library dependencies (§15.4), Clean Architecture layout (§15.3) |
