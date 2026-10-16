@@ -816,7 +816,7 @@ curl -s localhost:8080/panic >/dev/null
 
 ### Coverage
 
-`make cover-check` (CI: `coverage-gate.sh`, `COVERAGE_THRESHOLD`) fails below **98%** statement coverage measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` — tests live in `test/`, so plain `go test ./...` shows 0% for source packages. The current total is **99.6%**. Use `test/fixtures.MockLogger` to assert structured log output, and `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())` (or the `test/fixtures` helpers) for isolated registries.
+`make cover-check` (CI: `coverage-gate.sh`, `COVERAGE_THRESHOLD`) fails below **98%** statement coverage measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` — tests live in `test/`, so plain `go test ./...` shows 0% for source packages. The current total is **99.5%**. Use `test/fixtures.MockLogger` to assert structured log output, and `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())` (or the `test/fixtures` helpers) for isolated registries.
 
 ---
 

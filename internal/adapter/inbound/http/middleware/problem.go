@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/label"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
@@ -138,6 +141,9 @@ func WriteProblem(c *gin.Context, perr *problem.Error) {
 	body, _ := json.Marshal(p) // cannot fail: Problem has only strings, ints and string slices
 	c.Data(p.Status, problem.ContentType, body)
 	logProblem(s, p)
+	if perr.Unclassified() {
+		logUnclassified(c, s, p, perr.Err)
+	}
 }
 
 func problemSettings(c *gin.Context) ProblemSettings {
@@ -194,4 +200,73 @@ func logProblem(s ProblemSettings, p problem.Problem) {
 		fields["tenantId"] = p.TenantID
 	}
 	s.Logger.Warn("problem response", service.Sanitize(fields))
+}
+
+// maxErrorChain bounds the error_chain field of an "unclassified error" entry.
+const maxErrorChain = 8
+
+// logUnclassified emits the error-level "unclassified error" entry for a 500 that
+// reached the error handler unmapped (problem.Error.Unclassified): a programming
+// defect to alert on. It carries where it happened and the Go types along the error
+// chain, never the error's text, which may hold SQL, PII, tokens or secrets.
+// Services classify expected failures (a *problem.Error) or log the cause
+// themselves, sanitized, where they have the context.
+func logUnclassified(c *gin.Context, s ProblemSettings, p problem.Problem, cause error) {
+	if s.Logger == nil {
+		return
+	}
+	defer func() { _ = recover() }() // the response is already written
+	fields := map[string]any{
+		"classified":  false,
+		"traceId":     p.TraceID,
+		"trace_id":    traceIDFromContext(c),
+		"request_id":  requestIDFromContext(c),
+		"method":      sanitizeLogValue(c.Request.Method),
+		"route":       label.HTTPRoute(c),
+		"operation":   handlerOperation(c.HandlerName()),
+		"status":      p.Status,
+		"errorCode":   p.ErrorCode,
+		"error_type":  "<nil>",
+		"error_chain": []string{},
+	}
+	if s.Service != "" {
+		fields["service"] = s.Service
+	}
+	if chain := errorChainTypes(cause, maxErrorChain); len(chain) > 0 {
+		fields["error_type"] = chain[0]
+		fields["error_chain"] = chain
+	}
+	s.Logger.Error("unclassified error", fields)
+}
+
+// handlerOperation trims a Gin handler name to package.Func (the import path and
+// the method-value "-fm" suffix dropped), e.g. "tenders.(*API).Create".
+func handlerOperation(name string) string {
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	return sanitizeLogValue(strings.TrimSuffix(name, "-fm"))
+}
+
+// errorChainTypes lists the dynamic types along err's Unwrap chain (both
+// Unwrap() error and Unwrap() []error), outermost first, at most limit entries.
+// Type names are code identifiers, never error text.
+func errorChainTypes(err error, limit int) []string {
+	var out []string
+	queue := []error{err}
+	for len(queue) > 0 && len(out) < limit {
+		e := queue[0]
+		queue = queue[1:]
+		if e == nil {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%T", e))
+		switch u := e.(type) {
+		case interface{ Unwrap() error }:
+			queue = append(queue, u.Unwrap())
+		case interface{ Unwrap() []error }:
+			queue = append(queue, u.Unwrap()...)
+		}
+	}
+	return out
 }

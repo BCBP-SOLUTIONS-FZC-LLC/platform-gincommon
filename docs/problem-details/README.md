@@ -167,7 +167,25 @@ Each problem is logged once, at **WARN**, as `problem response`, with exactly th
 - `service` (`Config.ServiceName`)
 - `tenantId` (only when verified)
 
-These are the names and the level platform-pgcommon-py uses. The entry never contains the detail, the instance, headers, tokens or the identity beyond the verified tenant. The cause of a 500 is not logged by the error handler: log it yourself, with the trace id, where you have the context. `PanicRecoveryMiddleware` logs panics with their stack at ERROR, and `RequirePermissionWithLogger` logs `Authorizer` errors. The problem line is suppressed when `Config.Logger` is nil, and a logger that panics is ignored, because the response has already been sent.
+These are the names and the level platform-pgcommon-py uses. The entry never contains the detail, the instance, headers, tokens or the identity beyond the verified tenant. `PanicRecoveryMiddleware` logs panics with their stack at ERROR, and `RequirePermissionWithLogger` logs `Authorizer` errors. The problem line is suppressed when `Config.Logger` is nil, and a logger that panics is ignored, because the response has already been sent.
+
+### Unclassified errors
+
+An error that reaches the handler without a classification (`c.Error(err)` with a plain error, which `ClassifyError` maps to a 500 `internal-error`) is a **programming defect**: the service should have mapped the expected failure to a `*problem.Error`. The response stays a generic 500. The error handler logs one extra entry at **ERROR**:
+
+```
+level=error msg="unclassified error" classified=false
+  traceId=4bf9…  trace_id=4bf9…  request_id=abc123  service=iam-tender-acl
+  method=POST  route=/api/tenders  operation=tenders.(*API).Create
+  status=500  errorCode=INTERNAL_ERROR
+  error_type=*fmt.wrapError  error_chain=[*fmt.wrapError *pgconn.PgError]
+```
+
+It contains **no error text**. `err.Error()` can carry SQL, row values (`Key (email)=(john@example.com)`), tokens or secrets, and the global handler cannot know what is safe, so it records only where the failure happened (`route`, `operation`: the Gin handler function) and the Go types along the error's `Unwrap` chain (at most 8). That is enough to find the code path; the fix is to classify the failure there (or to log a sanitized cause yourself, with the trace id).
+
+- Not logged for classified errors, including a deliberate `problem.NewInternalError(cause)`, and not for panics, which `panic recovered` already logs with the stack. `problem.Error.Unclassified()` reports the state.
+- **Alert on it.** Each entry is a defect. Example Loki alert expression, with the labels the local Promtail pipeline sets (`service`, `level`; adapt to yours): `sum by (service) (count_over_time({level="error"} |= "unclassified error" [5m])) > 0`.
+- Go errors carry no stack trace. The handler's own stack would point at the error handler, not at the failure, so none is logged. Wrap errors with your service's stack-capturing type if you need one; its type then appears in `error_chain`.
 
 ## Security
 

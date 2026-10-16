@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 1.8 | 2026-10-16 | **OQ-24 resolved.** Unclassified 500s (`problem.Error.Unclassified()`) emit an error-level `unclassified error` entry with route, operation and error-chain types, never the error text (§7.3, P-6). |
 | 1.7 | 2026-10-16 | **Alignment with v2.0.0 and current status.** Package layout, dependency rules, symbol catalogue (`pkg/problem`, P-*), status map, log catalogue (`problem response`), §8.3 and §17.1 rewritten for RFC 9457 problems. New tests (§14): error contract, uninitialised-metrics pass-through, stream-timeout client cancel, custom validator, authz error logging; coverage 99.6%. Security: `go1.26.9`, `golang.org/x/net` v0.60.0 (§3.1). §18.1 consumer pins and v2 migration status; §19.2 v1.x → v2.0.0. OQ-8 resolved; OQ-24 (cause logging for unclassified 500s) added. |
 | 1.6 | 2026-10-16 | **RFC 9457 Problem Details (v2.0.0).** Every HTTP error is `application/problem+json` (§4.3). New `pkg/problem` (stdlib-only model, type registry, builder, error types, trace-id resolution, client decoder, OpenAPI components). The global error handler `ProblemMiddleware` is the innermost `ObservabilityMiddlewares` handler. `gincommon.ErrorResponse` was removed. The module path is now `/v2`. Full contract: `docs/problem-details/`. |
 | 1.5 | 2026-10-02 | **LLD-vs-code verification.** Three independent claim-by-claim checks against the code. ~45 document corrections (log field names, sanitisation scope, context-error statuses, gRPC check order, catalogue gaps, release/CI details, consumer usage). Six code gaps found; five fixed: gRPC authz logs carry `tenant_id`; `PropagateIdentityHeaders` removes a stale `x-tenant-roles`; gRPC span panic values are sanitized; every HTTP 500 body is `internal server error`; an empty `RegisterKnownMethods` no longer maps every method to `unknown`. The sixth (OTel error-logger downgrade) is recorded as OQ-22. New open items OQ-18–23, including OQ-18: all 11 services register `TimeoutMiddleware` outermost. |
@@ -389,7 +390,7 @@ Standard library only; a facade over `internal/problem`. Contract: [`docs/proble
 | P-3 | `TypeBadRequest` … `TypeGatewayTimeout` (15) · `PlatformTypes()` · `TypeForStatus(status)` | registry of record `docs/problem-details/registry.md` (drift-tested); a bare 400 → `bad-request`; unknown status → `about:blank` + status text |
 | P-4 | `func NewType(domain, name, title string, status int, code string) (Type, error)` · `MustType` · `ErrInvalidType` | kebab slugs, 4xx/5xx, upper-snake code; `platform` domain reserved |
 | P-5 | `type Error struct{ Type Type; Detail, Code string; ValidationErrors []FieldError; Err error }` · `NewError`, `NewValidationError`, `NewBadRequestError`, `NewUnauthorizedError`, `NewForbiddenError`, `NewNotFoundError`, `NewConflictError`, `NewBusinessRuleError`, `NewRateLimitError`, `NewNotImplementedError`, `NewServiceUnavailableError`, `NewInternalError` · `WithCode`/`WithCause`/`WithFields` | `Err` is the cause: `Unwrap`, logs only, never rendered |
-| P-6 | `func FromError(err error) *Error` | `*Error` in chain as is; `ErrUnsupported` 501; `DeadlineExceeded` 503 `REQUEST_TIMEOUT`; `*http.MaxBytesError` 413; else 500 without detail |
+| P-6 | `func FromError(err error) *Error` · `(*Error).Unclassified() bool` | `*Error` in chain as is; `ErrUnsupported` 501; `DeadlineExceeded` 503 `REQUEST_TIMEOUT`; `*http.MaxBytesError` 413; else 500 without detail, marked `Unclassified()` (logged as `unclassified error`, §7.3) |
 | P-7 | `NewBuilder(t)` · `BuilderFor(err)` · `.TypeBase/.Detail/.ErrorCode/.Instance/.TraceID/.TenantID/.ValidationErrors/.Timestamp` · `.Build() Problem` | `internal-error` never carries a detail or validationErrors |
 | P-8 | `ResolveTraceID(traceparent, requestID, spanTraceID)` · `TraceIDFromTraceparent` · `SanitizeRequestID` · `NewTraceID` | platform-pgcommon-py's order and vectors |
 | P-9 | `FromResponse(*http.Response) (*Problem, error)` · `Decode(io.Reader)` · `IsProblemContentType` · `ErrNotProblem` | clients; unknown members ignored; body read capped at 1 MiB |
@@ -639,6 +640,7 @@ Buckets: `request_duration` = `0.001 … 10` s (18 bounds); `payload_size` = `12
 | `authz: internal authorization error` / `grpc authz: internal error` | Error | AuthZ | identity, `action`, `resource`, sanitized `error` |
 | `authz: request context missing` / `authz: invalid request context type` | Error | HTTP AuthZ | misordered chain (ORD-3) / wrong context value type |
 | `problem response` | Warn | `WriteProblem` (every HTTP problem) | `traceId`, `type`, `status`, `errorCode`, `service` (when set), `tenantId` (verified only). Never detail, instance or identity; a panicking logger is ignored |
+| `unclassified error` | Error | `WriteProblem`, for an `Error.Unclassified()` 500 (a `FromError` fallback) | `classified=false`, `traceId`, `trace_id`, `request_id`, `service`, `method`, `route` (template), `operation` (Gin handler, `pkg.Func`), `status`, `errorCode`, `error_type`, `error_chain` (≤ 8 Go types along `Unwrap`). **Never the error text.** Not for deliberate `NewInternalError` or panics. Alert on it: each is a defect |
 | `authz: no authorizer configured` | Error | HTTP AuthZ | `action`, `resource` |
 | `panic recovered` | Error | HTTP recovery | `panic` (sanitized), `stack`, `method`, `route`, `path` (sanitized raw path), `status`, IDs, `duration_ms` |
 | `grpc panic recovered` | Error | gRPC recovery | `method` (raw `FullMethod`), `panic`, `stack` only |
@@ -1101,7 +1103,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | T-9 | `TestProtectedMiddlewares_RepeatedIdentityHeader401`, `TestGRPC_AmbiguousIdentityRejected` | SEC-3 |
 | T-10 | `TestGRPC_UnknownMethodBoundedLabel` | OBS-2 |
 
-**Coverage.** Measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` (tests live in a separate tree). The CI gate is ≥ 98% (`coverage-gate.sh`); the current total is 99.6%.
+**Coverage.** Measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` (tests live in a separate tree). The CI gate is ≥ 98% (`coverage-gate.sh`); the current total is 99.5%.
 
 ---
 
@@ -1156,7 +1158,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | OQ-21 | **Whitespace-only `APP_ENV` does not fall through to `ENVIRONMENT`** (raw non-empty check before normalisation) and fails startup | Library maintainers | Deferred |
 | OQ-22 | **A later `InitTracing` without a logger resets the OTel error handler to stderr** after `ObservabilityMiddlewares` set `Config.Logger` | Library maintainers | Deferred |
 | OQ-23 | **C1 control characters (U+0080–U+009F) are accepted** in identity headers | Library maintainers | Deferred |
-| OQ-24 | **Cause logging for unclassified 500s.** A handler's `c.Error(err)` that maps to `internal-error` is rendered without detail, and the error handler does not log `err` (its text may carry SQL or PII). Services that rely on `c.Error` alone lose the root cause. Option: log a sanitized `error` field on the `problem response` line for 5xx only | Platform team | Open |
+| OQ-24 | **Cause logging for unclassified 500s.** A handler's `c.Error(err)` that maps to `internal-error` lost its root cause | Platform team | **Resolved** 2026-10-16 — confidentiality first: the error text is never logged; an `unclassified error` entry (error level) records route, operation, request/trace ids and the error-chain types, and an unclassified 500 is treated as a defect to alert on (§7.3) |
 | OQ-17 | **gRPC roles parity.** Repeated `x-tenant-roles` are joined (not rejected); gateways must strip client-supplied roles | Gateway owners | Accepted (documented, SEC-1) |
 
 ---

@@ -25,6 +25,9 @@ type Error struct {
 	ValidationErrors []FieldError
 	// Err is the cause. It is never sent to the client.
 	Err error
+
+	// unclassified is set by FromError for an error it could not classify.
+	unclassified bool
 }
 
 // NewError is an Error of any registered type, typically a domain type:
@@ -134,6 +137,12 @@ func (e *Error) Error() string {
 // Unwrap returns the cause.
 func (e *Error) Unwrap() error { return e.Err }
 
+// Unclassified reports whether FromError fell back to internal-error because it
+// could not classify the error: an expected failure that reached the top-level
+// handler unmapped, which the platform treats as a programming defect. An
+// internal-error built deliberately with NewInternalError is classified.
+func (e *Error) Unclassified() bool { return e.unclassified }
+
 // Error codes the classifier uses for errors that are not *Error.
 const (
 	// CodeRequestTimeout is the errorCode of a 503 for an exceeded request deadline.
@@ -153,7 +162,7 @@ const (
 //   - context.DeadlineExceeded is 503 service-unavailable, errorCode REQUEST_TIMEOUT;
 //   - *http.MaxBytesError is 413 payload-too-large;
 //   - anything else is 500 internal-error with no detail, so no error text, SQL or
-//     internal detail ever reaches the client.
+//     internal detail ever reaches the client, marked Unclassified.
 //
 // A nil err returns nil. Framework-specific errors (Gin binding errors, an
 // Authorizer's ErrForbidden) are classified by the framework integration first.
@@ -174,5 +183,5 @@ func FromError(err error) *Error {
 	case errors.As(err, &mbe):
 		return &Error{Type: TypePayloadTooLarge, Detail: DetailPayloadTooLarge, Err: err}
 	}
-	return NewInternalError(err)
+	return &Error{Type: TypeInternalError, Err: err, unclassified: true}
 }
