@@ -74,6 +74,16 @@ groups:
           summary: "{{ $labels.service }} ({{ $labels.environment }}) recovered panics in {{ $labels.grpc_method }}"
           runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/blob/main/docs/observability/runbooks.md#platformgrpcpanics
 
+  - name: platform-errors
+    rules:
+      - alert: PlatformUnclassifiedErrors
+        expr: sum by (domain, service, environment, transport) (increase(platform_unclassified_errors_total[5m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }} ({{ $labels.environment }}) answered unclassified {{ $labels.transport }} errors as internal errors"
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/blob/main/docs/observability/runbooks.md#platformunclassifiederrors
+
   - name: platform-messaging
     rules:
       - alert: PlatformMessagesDeadLettered

@@ -68,3 +68,27 @@ tests:
             exp_annotations:
               summary: "invoice-worker (prod) dead-lettered 1 messages from invoices"
               runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/blob/main/docs/observability/runbooks.md#platformmessagesdeadlettered
+
+  - name: Unclassified errors raise a ticket per service and transport
+    interval: 1m
+    input_series:
+      - series: 'platform_unclassified_errors_total{domain="iam",service="tender-acl",environment="prod",transport="http"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'platform_unclassified_errors_total{domain="iam",service="tender-acl",environment="prod",transport="grpc"}'
+        values: '0x9'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PlatformUnclassifiedErrors
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              domain: iam
+              service: tender-acl
+              environment: prod
+              transport: http
+            exp_annotations:
+              summary: "tender-acl (prod) answered unclassified http errors as internal errors"
+              runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/blob/main/docs/observability/runbooks.md#platformunclassifiederrors
+      - eval_time: 9m
+        alertname: PlatformUnclassifiedErrors
+        exp_alerts: []

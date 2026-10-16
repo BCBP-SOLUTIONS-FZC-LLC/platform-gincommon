@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/service"
@@ -141,6 +142,7 @@ func WriteProblem(c *gin.Context, perr *problem.Error) {
 	c.Data(p.Status, problem.ContentType, body)
 	logProblem(s, p)
 	if perr.Unclassified() {
+		metrics.RecordUnclassifiedError(metrics.TransportHTTP) // recorded even without a logger
 		logUnclassified(c, s, p, perr.Err)
 	}
 }

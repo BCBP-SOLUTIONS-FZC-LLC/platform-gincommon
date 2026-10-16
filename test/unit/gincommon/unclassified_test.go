@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 )
@@ -181,5 +183,43 @@ func TestUnclassifiedError_ChainEdges(t *testing.T) {
 		if strings.Contains(fmt.Sprint(e[0].fields), "hunter2") {
 			t.Errorf("%s: error text leaked", name)
 		}
+	}
+}
+
+func unclassifiedCount(t *testing.T, transport string) float64 {
+	t.Helper()
+	return testutil.ToFloat64(metrics.UnclassifiedErrorsTotal.WithLabelValues(transport))
+}
+
+// platform_unclassified_errors_total{transport="http"} counts each unclassified 500,
+// also without a logger, and nothing else.
+func TestUnclassifiedError_Metric(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(gincommon.ObservabilityMiddlewares(gincommon.Config{ServiceName: "problem-test"})...) // no logger
+	r.GET("/plain", func(c *gin.Context) { _ = c.Error(errors.New("x")) })
+	r.GET("/classified", func(c *gin.Context) { _ = c.Error(problem.NewInternalError(errors.New("x"))) })
+	r.GET("/panic", func(*gin.Context) { panic("boom") })
+
+	before := unclassifiedCount(t, "http")
+	serve(r, http.MethodGet, "/plain", "", nil)
+	serve(r, http.MethodGet, "/plain", "", nil)
+	if got := unclassifiedCount(t, "http") - before; got != 2 {
+		t.Fatalf("http unclassified delta = %v, want 2", got)
+	}
+	before = unclassifiedCount(t, "http")
+	serve(r, http.MethodGet, "/classified", "", nil)
+	serve(r, http.MethodGet, "/panic", "", nil)
+	if got := unclassifiedCount(t, "http") - before; got != 0 {
+		t.Fatalf("classified/panic must not count: delta = %v", got)
+	}
+}
+
+// Both transports are exported from initialization, at 0 until the first error, so
+// increase() sees the first one.
+func TestUnclassifiedErrorsMetric_PreInitialised(t *testing.T) {
+	gincommon.ObservabilityMiddlewares(gincommon.Config{ServiceName: "problem-test"})
+	if n := testutil.CollectAndCount(metrics.UnclassifiedErrorsTotal, "platform_unclassified_errors_total"); n != 2 {
+		t.Fatalf("series = %d, want http and grpc", n)
 	}
 }

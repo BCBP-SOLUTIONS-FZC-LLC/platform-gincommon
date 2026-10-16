@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/core/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/problem"
 )
@@ -58,6 +59,7 @@ func UnaryErrorSanitizerInterceptor(logger port.Logger, serviceName string) grpc
 		resp, err := handler(ctx, req)
 		out, unclassified := sanitizeError(err)
 		if unclassified {
+			metrics.RecordUnclassifiedError(metrics.TransportGRPC)
 			logUnclassifiedGRPC(ctx, logger, serviceName, info.FullMethod, err)
 		}
 		return resp, out
@@ -71,6 +73,7 @@ func StreamErrorSanitizerInterceptor(logger port.Logger, serviceName string) grp
 		err := handler(srv, ss)
 		out, unclassified := sanitizeError(err)
 		if unclassified {
+			metrics.RecordUnclassifiedError(metrics.TransportGRPC)
 			logUnclassifiedGRPC(ss.Context(), logger, serviceName, info.FullMethod, err)
 		}
 		return out
