@@ -6,7 +6,7 @@
 |---|---|
 | Document type | Low-Level Design (LLD) |
 | Component | `platform-gincommon` (shared Gin HTTP + gRPC transport and observability library) |
-| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon` (`go 1.26.0`, `toolchain go1.26.6`) |
+| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon` (`go 1.26.0`, `toolchain go1.26.9`) |
 | Status | `v1.4.0` released 2026-10-02 — `make ci` and PR #30 CI green, coverage 98.9% |
 | Previous release | `v1.3.0` (pinned by all 11 IAM services today) |
 | Governing standard | Enterprise Platform Observability Standard ([`docs/observability/README.md`](../observability/README.md)) |
@@ -203,7 +203,7 @@ require (
 )
 ```
 
-The `go 1.26.0` directive (with `toolchain go1.26.6`) keeps consumers on any Go 1.26.x; CI builds with 1.26.6 via `setup-go`'s `go-version-file`. golangci-lint is a `go tool` dependency.
+The `go 1.26.0` directive (with `toolchain go1.26.9`) keeps consumers on any Go 1.26.x; CI builds with 1.26.9 via `setup-go`'s `go-version-file`. golangci-lint is a `go tool` dependency.
 
 ### 3.2 Dependency rules
 
@@ -1005,7 +1005,7 @@ Boolean `OTEL_*` values are case-insensitive (`true`/`1`/`yes`, `false`/`0`/`no`
 
 ### 13.2 Demo image
 
-Two-stage `Dockerfile`: digest-pinned `golang:1.26.6-alpine` builder; digest-pinned `alpine:3.21` runtime; `USER nobody`; `EXPOSE 8080`; `HEALTHCHECK` on `/health`. Pins are verified against `.docker-digests` in CI. The smoke gate requires an image of at most 60 MB, a non-zero exit with the registry error on an invalid `OBSERVABILITY_DOMAIN`, and `/health` + `/metrics` with identity labels.
+Two-stage `Dockerfile`: digest-pinned `golang:1.26.9-alpine` builder; digest-pinned `alpine:3.21` runtime; `USER nobody`; `EXPOSE 8080`; `HEALTHCHECK` on `/health`. Pins are verified against `.docker-digests` in CI. The smoke gate requires an image of at most 60 MB, a non-zero exit with the registry error on an invalid `OBSERVABILITY_DOMAIN`, and `/health` + `/metrics` with identity labels.
 
 ### 13.3 Compatibility and release gates
 

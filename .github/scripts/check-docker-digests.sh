@@ -5,7 +5,7 @@
 set -euo pipefail
 
 if grep -E '^FROM [^ @]+:[^ @]+( AS .+)?$' Dockerfile; then
-  echo "::error file=Dockerfile,title=Unpinned base image::Dockerfile FROM lines must use digest-pinned references (e.g. golang:1.26.6-alpine@sha256:...). Run 'make pin-base-images' to update."
+  echo "::error file=Dockerfile,title=Unpinned base image::Dockerfile FROM lines must use digest-pinned references (e.g. golang:1.26.9-alpine@sha256:...). Run 'make pin-base-images' to update."
   exit 1
 fi
 

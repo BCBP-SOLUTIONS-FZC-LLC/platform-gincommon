@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Toolchain `go1.26.6` → `go1.26.9` and `golang.org/x/net` v0.59.0 → v0.60.0**, fixing the standard-library and x/net vulnerabilities `govulncheck` reports as reachable from library code:
+  - GO-2026-6617 (HTTP/2 HPACK encoder race)
+  - GO-2026-6613 and GO-2026-6605 (HTTP/1 CONNECT desynchronization)
+  - GO-2026-6612, GO-2026-6611 and GO-2026-6610 (HTTP/2 flow control, window CPU and framing headers)
+  - GO-2026-6608 (MIME header memory limit)
+  - GO-2026-6607 (crypto/tls ECH)
+  - GO-2026-6603 (HTTP/2 trailer memory)
+  - The demo image builder is re-pinned to `golang:1.26.9-alpine`. The `go 1.26.0` directive is unchanged, so consumers are not forced onto a newer Go, but they should build with 1.26.9 or later for the same fixes.
+
 ## [1.6.0] - 2026-10-03
 
 ### Added

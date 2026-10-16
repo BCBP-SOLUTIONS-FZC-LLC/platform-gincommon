@@ -102,7 +102,7 @@ jobs:
             exit 1
           fi
 
-      # Floating tags (golang:1.26.6-alpine without @sha256:...) can be
+      # Floating tags (golang:1.26.9-alpine without @sha256:...) can be
       # overwritten upstream, breaking supply-chain guarantees. The digests must
       # also match the checked-in provenance record .docker-digests.
       # Run `make pin-base-images` (requires docker) to update both.
