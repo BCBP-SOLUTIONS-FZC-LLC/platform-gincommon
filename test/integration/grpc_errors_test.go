@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -22,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/inbound/label"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/internal/adapter/outbound/metrics"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/grpccommon"
 )
 
@@ -139,6 +141,7 @@ func TestGRPC_ErrorSanitizer(t *testing.T) {
 		{"ClaimsOK", codes.Internal, "internal server error", true},
 		{"Status", codes.AlreadyExists, "Tender exists.", false},
 	}
+	metricBefore := testutil.ToFloat64(metrics.UnclassifiedErrorsTotal.WithLabelValues("grpc"))
 	for _, tc := range cases {
 		before := len(logs.byMsg("unclassified error"))
 		st := status.Convert(call(conn, tc.method))
@@ -150,6 +153,9 @@ func TestGRPC_ErrorSanitizer(t *testing.T) {
 		}
 	}
 
+	if got := testutil.ToFloat64(metrics.UnclassifiedErrorsTotal.WithLabelValues("grpc")) - metricBefore; got != 2 {
+		t.Errorf("grpc unclassified delta = %v, want 2 (Plain, ClaimsOK)", got)
+	}
 	e := logs.byMsg("unclassified error")[0]
 	f := e.fields
 	if e.level != "error" || f["classified"] != false || f["grpc_method"] != "/test.Errors/Plain" ||

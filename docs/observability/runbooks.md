@@ -53,6 +53,15 @@ Runbooks for the reference alerts in [`docker/prometheus/rules/platform-alerts.y
 
 **Meaning and triage.** As for HTTP, for `$grpc_method`. The span in Tempo carries the panic value.
 
+## PlatformUnclassifiedErrors
+
+**Meaning:** a service answered at least one error with a generic internal error (HTTP 500 `platform/internal-error`, gRPC `Internal "internal server error"`) because nothing classified it. `platform_unclassified_errors_total{transport}` counts them; each one is a programming defect, not an outage.
+
+**Triage:**
+1. Find the failing code path in the logs: `{service="<service>", level="error"} |= "unclassified error"`. The entry carries `route` / `operation` (HTTP) or `grpc_method` (gRPC), `error_type`, `error_chain`, and `request_id` / `trace_id` to open the trace. It never contains the error text, by design.
+2. Fix it where the failure happens: map the expected failure to a problem type (`problem.NewError(...)`, a `PlatformException`, a gRPC status). If it is truly unexpected, log a sanitized cause there, with the trace id.
+3. A burst after a deploy usually means a new dependency error type that the service does not classify yet.
+
 ## PlatformMessagesDeadLettered
 
 **Meaning.** Messages from `$queue` were routed to the dead-letter queue in the last 10 minutes.

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`platform_unclassified_errors_total{transport}`** (registry `approved`, LLD OQ-25): counts every unclassified error. That is an HTTP `problem.Error.Unclassified()` 500 or a non-status gRPC handler error sent as `Internal`, with `transport` = `http` | `grpc`. It is recorded with or without a logger, and both series are initialised to 0, so `increase()` sees the first error. New reference alert `PlatformUnclassifiedErrors` (ticket), with a promtool test and a runbook. The `unclassified error` log event is retained for diagnostics; the metric deliberately has no route or method label. New registry label `transport`.
 - **gRPC handler errors no longer leak to clients.** A new error sanitizer is the innermost interceptor of `ObservabilityUnaryInterceptors` / `ObservabilityStreamInterceptors` (and so of `Full*` / `Default*`). Before it, grpc-go sent a plain handler error as `Unknown` with `err.Error()` as the message, and a status wrapped with `fmt.Errorf("…: %w", st)` carried the wrapper's text. Now:
   - a status error is kept; a wrapped one is sent as its inner status (code, message, details) without the wrapper's text;
   - `context.DeadlineExceeded` / `context.Canceled` (wrapped or not) become `DeadlineExceeded "deadline exceeded"` / `Canceled "canceled"`;

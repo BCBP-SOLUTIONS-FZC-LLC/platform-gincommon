@@ -59,6 +59,9 @@ var (
 	// GrpcPanicTotal is platform_grpc_panics_total{grpc_method}.
 	GrpcPanicTotal *prometheus.CounterVec
 
+	// UnclassifiedErrorsTotal is platform_unclassified_errors_total{transport}.
+	UnclassifiedErrorsTotal *prometheus.CounterVec
+
 	// BuildInfo is platform_build_info{version}, always 1.
 	BuildInfo *prometheus.GaugeVec
 )
@@ -97,6 +100,7 @@ type collectorSet struct {
 	grpcInflight        *prometheus.GaugeVec
 	grpcRateLimited     *prometheus.CounterVec
 	grpcPanics          *prometheus.CounterVec
+	unclassifiedErrors  *prometheus.CounterVec
 }
 
 const defaultVersion = "unknown"
@@ -381,8 +385,13 @@ func initCollectors(opts Options, reg prometheus.Registerer) error {
 		grpcInflight:        b.gaugeVec("platform_grpc_server_inflight_requests"),
 		grpcRateLimited:     b.counterVec("platform_grpc_rate_limited_requests_total"),
 		grpcPanics:          b.counterVec("platform_grpc_panics_total"),
+		unclassifiedErrors:  b.counterVec("platform_unclassified_errors_total"),
 	}
 	cs.buildInfo.WithLabelValues(opts.BuildVersion).Set(1)
+	// Both series exist from startup (at 0), so increase() sees the first error.
+	for _, t := range []string{TransportHTTP, TransportGRPC} {
+		cs.unclassifiedErrors.WithLabelValues(t)
+	}
 
 	if err := registerAll(reg, b.built); err != nil {
 		return err
@@ -404,6 +413,7 @@ func initCollectors(opts Options, reg prometheus.Registerer) error {
 	GrpcInflight = cs.grpcInflight
 	GrpcRateLimitedRequestsTotal = cs.grpcRateLimited
 	GrpcPanicTotal = cs.grpcPanics
+	UnclassifiedErrorsTotal = cs.unclassifiedErrors
 	active.Store(cs)
 	return nil
 }

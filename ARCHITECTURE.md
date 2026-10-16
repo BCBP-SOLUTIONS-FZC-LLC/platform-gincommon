@@ -46,7 +46,7 @@ graph TD
     end
 
     subgraph registry["Governance  —  internal/obsregistry/"]
-        reg["registry.json (embedded, 114 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
+        reg["registry.json (embedded, 115 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
     end
 
     subgraph core["Core  —  internal/core/  (no framework imports)"]
@@ -758,7 +758,7 @@ graph LR
         own["gincommon entries<br/>platform_http_* · platform_grpc_* · platform_build_info<br/>status proposed, pending governance"]
     end
 
-    subgraph registry["internal/obsregistry/registry.json — embedded, 114 entries"]
+    subgraph registry["internal/obsregistry/registry.json — embedded, 115 entries"]
         entries["metrics: 5 approved · 48 proposed · 57 removed (legacy, with replacements)<br/>labels: vocabulary, patterns, max_values, cardinality<br/>prohibited labels (tenant_id, user_id, ...)<br/>bucket presets · owners · governance_notes"]
         parse["Parse: strict — unknown fields, duplicates,<br/>undefined labels/buckets, legacy without replacement"]
     end
@@ -1155,7 +1155,7 @@ Judgment calls made during the v1.4.0 hardening passes (1–11) and the v2.0.0 e
 13. **The Go "platform-problem-details" library lives here.** `pkg/problem` (standard library only, `internal/problem` behind it) is the model, registry, builder, error types and client decoder, instead of a separate repository. Gin services, Go gateways/BFFs and clients import one module; platform-fastapicommon and platform-pgcommon-py mirror it.
 14. **platform-pgcommon-py's `traceId` order.** `traceparent` → sanitized client `x-request-id` → span → generated, with the same test vectors, so a Go and a Python service answer the same request with the same `traceId`. When a client sends only `x-request-id`, `traceId` is that id and differs from `X-Trace-ID`; the problem log line always carries the resolved value.
 15. **No detail on `internal-error`, enforced in the builder.** Unclassified errors, panics, authorizer errors and context misconfiguration all become a detail-less 500, and `Builder.Build` strips a detail even if one was set, so no code path can leak an exception message. v1 exposed `request context missing` in 500 bodies.
-16. **One WARN `problem response` line; types, not text, for unclassified 500s.** The problem line has the same fields and level as pgcommon-py, never the detail, instance or identity. An unclassified 500 (a `FromError` fallback) also emits an error-level `unclassified error` entry with route, operation (the Gin handler), request/trace ids and the Go types along the error chain, but never `err.Error()`: confidentiality of logs wins over debugging convenience, because the global handler cannot know whether the text holds SQL, PII or secrets. An unclassified 500 is a defect to alert on; the fix is to classify the failure where it happens (LLD OQ-24).
+16. **One WARN `problem response` line; types, not text, for unclassified 500s.** The problem line has the same fields and level as pgcommon-py, never the detail, instance or identity. An unclassified 500 (a `FromError` fallback) also emits an error-level `unclassified error` entry with route, operation (the Gin handler), request/trace ids and the Go types along the error chain, but never `err.Error()`: confidentiality of logs wins over debugging convenience, because the global handler cannot know whether the text holds SQL, PII or secrets. An unclassified 500 is a defect: it also increments `platform_unclassified_errors_total{transport}` (approved, LLD OQ-25), which drives the `PlatformUnclassifiedErrors` alert, while the log entry stays for diagnostics. The fix is to classify the failure where it happens (LLD OQ-24).
 17. **Status codes unchanged.** Library-emitted errors keep their v1 statuses, including the 503 timeout (`service-unavailable` / `REQUEST_TIMEOUT`, not 504). Only the body and the content type changed. fastapicommon moved its timeout from 504 to 503 to match.
 18. **The error handler renders bodiless statuses and Gin's 404/405.** Running innermost in `ObservabilityMiddlewares` gives every engine problem bodies for unregistered routes without `NoRoute` wiring, while never touching a response the handler wrote. `c.AbortWithStatus*` / `c.AbortWithError` / `c.BindJSON` commit headers immediately and cannot be converted; the migration guide replaces them.
 19. **gRPC errors under the same rule.** A plain handler error used to reach gRPC clients as `Unknown` with `err.Error()`, and a status wrapped with `fmt.Errorf("…: %w", st)` carried the wrapper's text. The innermost error sanitizer sends only status errors as-is (unwrapping to the inner status), and everything else as `Internal "internal server error"`, logged as `unclassified error` with types only. Callers that matched on `Unknown` or on message text must switch to status codes.
