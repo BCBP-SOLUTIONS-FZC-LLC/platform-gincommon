@@ -252,10 +252,6 @@ jobs:
       # This repo's own PR/branch ref; the other five default to their main branch (see
       # platform-interop-tests/README.md for why).
       platform_gincommon_ref: ${{ github.head_ref || github.ref_name }}
-      # TEMPORARY (RFC 9457 migration): fastapicommon's problem-details branch, so pair 2
-      # compares two problems rather than one problem and one legacy body. Remove this line
-      # once platform-fastapicommon#19 is on main; keep that branch until then.
-      platform_fastapicommon_ref: feat/rfc9457-problem-details
     secrets:
       # Requires a secret with read access across all six libraries. This org uses
       # GO_PRIVATE_TOKEN (already defined) for that; interop.yml's own input is
