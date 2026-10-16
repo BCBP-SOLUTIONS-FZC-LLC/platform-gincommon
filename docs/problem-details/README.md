@@ -255,7 +255,7 @@ Branch on `Status`, `Type` and `ErrorCode`, and surface `Title`, `Detail` and `T
 
 ## Events and messaging
 
-RFC 9457 applies to synchronous HTTP APIs only. Never publish a `Problem` to a topic or queue; event contracts (platform-events, platform-eventcommon) are unchanged. gRPC is unaffected: `pkg/grpccommon` keeps gRPC status codes.
+RFC 9457 applies to synchronous HTTP APIs only. Never publish a `Problem` to a topic or queue; event contracts (platform-events, platform-eventcommon) are unchanged. gRPC keeps gRPC status codes (`pkg/grpccommon`), under the same rule that no internal detail reaches a client: the error sanitizer in the `Observability*` / `Full*` chains sends a plain handler error as `Internal "internal server error"` (never grpc-go's `Unknown` + `err.Error()`), keeps only the inner status of a wrapped status error, and logs unclassified errors with the same `unclassified error` entry (`grpc_method` instead of `route`/`operation`).
 
 ## Migrating from v1.x
 

@@ -45,7 +45,7 @@ This is enforced structurally: the `core/` layers never import `adapter/` or fra
 
 Five public packages and one CLI. Source of truth: `go doc ./pkg/<name>`; the tables below are the stable surface covered by SemVer ([VERSIONING.md](VERSIONING.md)). `internal/*`, `cmd/server` and `test/*` are not.
 
-**Default HTTP chain:** `gincommon.DefaultMiddlewares` = `ObservabilityMiddlewares` (`PanicRecovery → RequestID → Tracing → CorrelationHeaders → Metrics → Logging → [Timeout when Config.RequestTimeout > 0] → error handler`) + `ProtectedMiddlewares` (`RequireAuth → ContextMiddleware`). **Default gRPC chain:** `grpccommon.FullUnaryInterceptors` = `recovery → request ID → tracing → metrics → logging → auth → context` (logging wraps auth, so rejected calls are logged).
+**Default HTTP chain:** `gincommon.DefaultMiddlewares` = `ObservabilityMiddlewares` (`PanicRecovery → RequestID → Tracing → CorrelationHeaders → Metrics → Logging → [Timeout when Config.RequestTimeout > 0] → error handler`) + `ProtectedMiddlewares` (`RequireAuth → ContextMiddleware`). **Default gRPC chain:** `grpccommon.FullUnaryInterceptors` = `recovery → request ID → tracing → metrics → logging → error sanitizer → auth → context` (logging wraps auth, so rejected calls are logged; the sanitizer turns a plain handler error into `Internal "internal server error"` instead of grpc-go sending `Unknown` with the error text).
 
 ### `pkg/gincommon` — HTTP services
 
