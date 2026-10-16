@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -202,9 +201,6 @@ func logProblem(s ProblemSettings, p problem.Problem) {
 	s.Logger.Warn("problem response", service.Sanitize(fields))
 }
 
-// maxErrorChain bounds the error_chain field of an "unclassified error" entry.
-const maxErrorChain = 8
-
 // logUnclassified emits the error-level "unclassified error" entry for a 500 that
 // reached the error handler unmapped (problem.Error.Unclassified): a programming
 // defect to alert on. It carries where it happened and the Go types along the error
@@ -232,7 +228,7 @@ func logUnclassified(c *gin.Context, s ProblemSettings, p problem.Problem, cause
 	if s.Service != "" {
 		fields["service"] = s.Service
 	}
-	if chain := errorChainTypes(cause, maxErrorChain); len(chain) > 0 {
+	if chain := problem.ErrorChainTypes(cause, problem.MaxErrorChain); len(chain) > 0 {
 		fields["error_type"] = chain[0]
 		fields["error_chain"] = chain
 	}
@@ -246,27 +242,4 @@ func handlerOperation(name string) string {
 		name = name[i+1:]
 	}
 	return sanitizeLogValue(strings.TrimSuffix(name, "-fm"))
-}
-
-// errorChainTypes lists the dynamic types along err's Unwrap chain (both
-// Unwrap() error and Unwrap() []error), outermost first, at most limit entries.
-// Type names are code identifiers, never error text.
-func errorChainTypes(err error, limit int) []string {
-	var out []string
-	queue := []error{err}
-	for len(queue) > 0 && len(out) < limit {
-		e := queue[0]
-		queue = queue[1:]
-		if e == nil {
-			continue
-		}
-		out = append(out, fmt.Sprintf("%T", e))
-		switch u := e.(type) {
-		case interface{ Unwrap() error }:
-			queue = append(queue, u.Unwrap())
-		case interface{ Unwrap() []error }:
-			queue = append(queue, u.Unwrap()...)
-		}
-	}
-	return out
 }

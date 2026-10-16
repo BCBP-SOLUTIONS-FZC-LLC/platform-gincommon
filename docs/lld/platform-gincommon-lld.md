@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 1.9 | 2026-10-16 | **gRPC error sanitizer.** The innermost `Observability*` gRPC interceptor stops plain handler errors reaching clients as `Unknown` + `err.Error()` (now `Internal "internal server error"` + `unclassified error` log) and drops wrapper text around a status (§5.5, §7.3, §17.2). |
 | 1.8 | 2026-10-16 | **OQ-24 resolved.** Unclassified 500s (`problem.Error.Unclassified()`) emit an error-level `unclassified error` entry with route, operation and error-chain types, never the error text (§7.3, P-6). |
 | 1.7 | 2026-10-16 | **Alignment with v2.0.0 and current status.** Package layout, dependency rules, symbol catalogue (`pkg/problem`, P-*), status map, log catalogue (`problem response`), §8.3 and §17.1 rewritten for RFC 9457 problems. New tests (§14): error contract, uninitialised-metrics pass-through, stream-timeout client cancel, custom validator, authz error logging; coverage 99.6%. Security: `go1.26.9`, `golang.org/x/net` v0.60.0 (§3.1). §18.1 consumer pins and v2 migration status; §19.2 v1.x → v2.0.0. OQ-8 resolved; OQ-24 (cause logging for unclassified 500s) added. |
 | 1.6 | 2026-10-16 | **RFC 9457 Problem Details (v2.0.0).** Every HTTP error is `application/problem+json` (§4.3). New `pkg/problem` (stdlib-only model, type registry, builder, error types, trace-id resolution, client decoder, OpenAPI components). The global error handler `ProblemMiddleware` is the innermost `ObservabilityMiddlewares` handler. `gincommon.ErrorResponse` was removed. The module path is now `/v2`. Full contract: `docs/problem-details/`. |
@@ -171,7 +172,7 @@ platform-gincommon/
 │   │   │   │                              #   logging, timeout, auth, identity, context, authz, keys,
 │   │   │                              #   problem (ProblemMiddleware, WriteProblem, ClassifyError), binding (BindingError)
 │   │   │   ├── grpc/middleware/           # recovery, request_id, tracing, metrics, logging, auth, context, authz,
-│   │   │   │                              #   timeout, client, status, stream, keys
+│   │   │   │                              #   timeout, client, status, stream, keys, errors (error sanitizer)
 │   │   │   └── label/                     # HTTPRoute, GRPCMethod, RegisterGRPCMethods
 │   │   └── outbound/
 │   │       ├── metrics/                   # metrics.go (init), record.go, outcome.go, buckets.go, message_size.go, errorlog.go
@@ -220,7 +221,7 @@ The `go 1.26.0` directive (with `toolchain go1.26.9`) keeps consumers on any Go 
 | `core/domain` | nothing |
 | `core/port` | `domain` |
 | `core/service` | `domain` (`RBACService` satisfies `port.Authorizer` structurally) |
-| `adapter/inbound/{http,grpc}/middleware` | `label`, `adapter/outbound/metrics`, `service`, `port`, `domain`; HTTP also `internal/problem` |
+| `adapter/inbound/{http,grpc}/middleware` | `label`, `adapter/outbound/metrics`, `service`, `port`, `domain`, `internal/problem` (gRPC: `ErrorChainTypes` only) |
 | `adapter/inbound/label`, `adapter/outbound/logger`, `obsregistry`, `problem`, `config` | nothing (`problem` is standard library only) |
 | `adapter/outbound/metrics` | `obsregistry`, `config` |
 | `adapter/outbound/otel` | `config`, `port` |
@@ -498,7 +499,7 @@ Standard library only; a facade over `internal/problem`. Contract: [`docs/proble
 | No `RequestContext` at authz (misordered) | 500 · `platform/internal-error` (no detail) | `FailedPrecondition` |
 | Timeout | 503 · `platform/service-unavailable` · `REQUEST_TIMEOUT` | `DeadlineExceeded` |
 | Unregistered route / method | 404 `ROUTE_NOT_FOUND` / 405 `METHOD_NOT_ALLOWED` | — |
-| Handler `c.Error(err)` | `ClassifyError(err)` (G-8, P-6) | — |
+| Handler `c.Error(err)` / returned error | `ClassifyError(err)` (G-8, P-6) | status error kept (a wrapped one → its inner status, wrapper text dropped); context error → `DeadlineExceeded` / `Canceled` with a fixed message; anything else (or a status claiming OK) → `Internal "internal server error"` + `unclassified error` log |
 
 ---
 
@@ -640,7 +641,7 @@ Buckets: `request_duration` = `0.001 … 10` s (18 bounds); `payload_size` = `12
 | `authz: internal authorization error` / `grpc authz: internal error` | Error | AuthZ | identity, `action`, `resource`, sanitized `error` |
 | `authz: request context missing` / `authz: invalid request context type` | Error | HTTP AuthZ | misordered chain (ORD-3) / wrong context value type |
 | `problem response` | Warn | `WriteProblem` (every HTTP problem) | `traceId`, `type`, `status`, `errorCode`, `service` (when set), `tenantId` (verified only). Never detail, instance or identity; a panicking logger is ignored |
-| `unclassified error` | Error | `WriteProblem`, for an `Error.Unclassified()` 500 (a `FromError` fallback) | `classified=false`, `traceId`, `trace_id`, `request_id`, `service`, `method`, `route` (template), `operation` (Gin handler, `pkg.Func`), `status`, `errorCode`, `error_type`, `error_chain` (≤ 8 Go types along `Unwrap`). **Never the error text.** Not for deliberate `NewInternalError` or panics. Alert on it: each is a defect |
+| `unclassified error` | Error | HTTP: `WriteProblem`, for an `Error.Unclassified()` 500 (a `FromError` fallback). gRPC: `Unary/StreamErrorSanitizerInterceptor` for a non-status handler error (fields `grpc_method`, `grpc_code=INTERNAL` instead of `method`/`route`/`operation`/`status`/`errorCode`/`traceId`) | `classified=false`, `traceId`, `trace_id`, `request_id`, `service`, `method`, `route` (template), `operation` (Gin handler, `pkg.Func`), `status`, `errorCode`, `error_type`, `error_chain` (≤ 8 Go types along `Unwrap`). **Never the error text.** Not for deliberate `NewInternalError` or panics. Alert on it: each is a defect |
 | `authz: no authorizer configured` | Error | HTTP AuthZ | `action`, `resource` |
 | `panic recovered` | Error | HTTP recovery | `panic` (sanitized), `stack`, `method`, `route`, `path` (sanitized raw path), `status`, IDs, `duration_ms` |
 | `grpc panic recovered` | Error | gRPC recovery | `method` (raw `FullMethod`), `panic`, `stack` only |
@@ -1201,7 +1202,7 @@ All are `application/problem+json` with `instance`, `traceId`, `timestamp`, and 
 | `InvalidArgument` | `invalid request context` | context build failure (fixed message) |
 | `PermissionDenied` | `forbidden` | authorizer denied |
 | `FailedPrecondition` | `request context missing — ensure ProtectedUnaryInterceptors ran before RequirePermission` | ORD-3 |
-| `Internal` | `internal server error` | panic, authorizer error, nil authorizer |
+| `Internal` | `internal server error` | panic, authorizer error, nil authorizer, any non-status handler error (error sanitizer; logged as `unclassified error`) |
 | `DeadlineExceeded` | `stream deadline exceeded` | stream timeout cap |
 
 ### 17.3 Startup errors and panics

@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **gRPC handler errors no longer leak to clients.** A new error sanitizer is the innermost interceptor of `ObservabilityUnaryInterceptors` / `ObservabilityStreamInterceptors` (and so of `Full*` / `Default*`). Before it, grpc-go sent a plain handler error as `Unknown` with `err.Error()` as the message, and a status wrapped with `fmt.Errorf("…: %w", st)` carried the wrapper's text. Now:
+  - a status error is kept; a wrapped one is sent as its inner status (code, message, details) without the wrapper's text;
+  - `context.DeadlineExceeded` / `context.Canceled` (wrapped or not) become `DeadlineExceeded "deadline exceeded"` / `Canceled "canceled"`;
+  - anything else, including a non-nil error claiming `OK`, becomes `Internal "internal server error"` and is logged at error level as `unclassified error` (`classified=false`, `trace_id`, `request_id`, `service`, `grpc_method`, `grpc_code`, `error_type`, `error_chain`), never `err.Error()`.
+  - Metrics, the `grpc_request` log and spans record the sanitized status (they run outside it). Callers that matched on `Unknown` or on error text must use status codes.
 - **Toolchain `go1.26.6` → `go1.26.9` and `golang.org/x/net` v0.59.0 → v0.60.0**, fixing the standard-library and x/net vulnerabilities `govulncheck` reports as reachable from library code:
   - GO-2026-6617 (HTTP/2 HPACK encoder race)
   - GO-2026-6613 and GO-2026-6605 (HTTP/1 CONNECT desynchronization)

@@ -84,7 +84,14 @@ func resolveGRPCTelemetry(cfg Config) otelsetup.TelemetryConfig {
 }
 
 // ObservabilityUnaryInterceptors returns the observability interceptor chain for unary RPCs:
-// panic recovery → request ID → tracing → metrics → logging.
+// panic recovery → request ID → tracing → metrics → logging → error sanitizer.
+//
+// The error sanitizer (innermost, so every signal records what the client gets) keeps
+// status errors (only the inner status of a wrapped one, never the wrappers' text),
+// gives context errors a fixed message, and turns any other handler error into
+// Internal "internal server error", logged as an error-level "unclassified error"
+// entry with the error-chain types but never err.Error(). grpc-go would otherwise
+// send a plain error to the client as Unknown with its full text.
 // Panics if cfg.ServiceName is empty.
 func ObservabilityUnaryInterceptors(cfg Config) []grpc.UnaryServerInterceptor {
 	if cfg.ServiceName == "" {
@@ -102,10 +109,12 @@ func ObservabilityUnaryInterceptors(cfg Config) []grpc.UnaryServerInterceptor {
 		mw.UnaryTracingInterceptor(cfg.ServiceName),
 		mw.UnaryMetricsInterceptor(),
 		mw.UnaryLoggingInterceptor(cfg.Logger),
+		mw.UnaryErrorSanitizerInterceptor(cfg.Logger, cfg.ServiceName),
 	}
 }
 
-// ObservabilityStreamInterceptors returns the observability interceptor chain for streaming RPCs.
+// ObservabilityStreamInterceptors returns the observability interceptor chain for streaming RPCs,
+// in the same order as ObservabilityUnaryInterceptors (including the error sanitizer).
 // Panics if cfg.ServiceName is empty.
 func ObservabilityStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor {
 	if cfg.ServiceName == "" {
@@ -123,6 +132,7 @@ func ObservabilityStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor 
 		mw.StreamTracingInterceptor(cfg.ServiceName),
 		mw.StreamMetricsInterceptor(),
 		mw.StreamLoggingInterceptor(cfg.Logger),
+		mw.StreamErrorSanitizerInterceptor(cfg.Logger, cfg.ServiceName),
 	}
 }
 
@@ -146,7 +156,7 @@ func ProtectedStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor {
 }
 
 // FullUnaryInterceptors returns the complete interceptor stack for unary RPCs:
-// panic recovery → request ID → tracing → metrics → logging → auth → context —
+// panic recovery → request ID → tracing → metrics → logging → error sanitizer → auth → context —
 // i.e. ObservabilityUnaryInterceptors followed by ProtectedUnaryInterceptors.
 //
 // Logging wraps auth, so calls rejected by RequireAuth (codes.Unauthenticated)
@@ -159,7 +169,7 @@ func FullUnaryInterceptors(cfg Config) []grpc.UnaryServerInterceptor {
 }
 
 // FullStreamInterceptors returns the complete interceptor stack for streaming RPCs:
-// panic recovery → request ID → tracing → metrics → logging → auth → context.
+// panic recovery → request ID → tracing → metrics → logging → error sanitizer → auth → context.
 // Same ordering and logging semantics as FullUnaryInterceptors.
 // Panics if cfg.ServiceName is empty.
 func FullStreamInterceptors(cfg Config) []grpc.StreamServerInterceptor {

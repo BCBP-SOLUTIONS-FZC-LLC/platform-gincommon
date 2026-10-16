@@ -13,5 +13,5 @@ flowchart TD
 
     B -- "DefaultMiddlewares(cfg)" --> J["ObservabilityMiddlewares(cfg)<br/>+ ProtectedMiddlewares(cfg)"]
 
-    B -- "FullUnary/StreamInterceptors(cfg)" --> K["Observability*(cfg) + Protected*(cfg)<br/>recovery → request ID → tracing → metrics → logging<br/>→ auth → context"]
+    B -- "FullUnary/StreamInterceptors(cfg)" --> K["Observability*(cfg) + Protected*(cfg)<br/>recovery → request ID → tracing → metrics → logging<br/>→ error sanitizer → auth → context"]
     K --> L(["append Timeout*Interceptor(d) last — innermost<br/>RequirePermission* after Protected*"])
