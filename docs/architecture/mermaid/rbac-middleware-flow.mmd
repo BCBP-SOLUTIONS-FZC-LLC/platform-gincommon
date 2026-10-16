@@ -11,18 +11,18 @@ sequenceDiagram
     else no RequestContext in context (RequirePermission placed before Protected*)
         AZ -->> Chain: HTTP 500 · gRPC FailedPrecondition<br/>"request context missing — ensure ProtectedUnaryInterceptors ran first"
     else authorizer is nil
-        AZ -->> Chain: 500 / codes.Internal "internal server error"
+        AZ -->> Chain: 500 internal-error problem / codes.Internal "internal server error"
     else RequestContext present
         AZ ->>+ A: Authorize(ctx, rc, action, resource)
         Note over A: ctx carries deadline, cancellation, trace span<br/>rc carries TenantID, UserID, Roles — tenant-scoped policy
         alt error wraps ErrForbidden
             A -->> AZ: ErrForbidden
             Note over AZ: warn "authz: access denied"<br/>{tenant_id, user_id, roles, action, resource}
-            AZ -->> Chain: 403 / codes.PermissionDenied "forbidden"
+            AZ -->> Chain: 403 forbidden problem / codes.PermissionDenied "forbidden"
         else any other error
             A -->> AZ: err
             Note over AZ: error "authz: internal error" (sanitized)<br/>detail never sent to the client
-            AZ -->> Chain: 500 / codes.Internal "internal server error"
+            AZ -->> Chain: 500 internal-error problem / codes.Internal "internal server error"
         else nil
             A -->>- AZ: nil
             AZ ->>+ H: next

@@ -239,3 +239,28 @@ func TestValidate_PartialGather(t *testing.T) {
 		t.Errorf("clean gather: %v, %+v", err, rep)
 	}
 }
+
+// OpenMetrics normalization edge cases: info families gain _info, blank lines and plain
+// comments are tolerated, and a quoted label value containing an escaped quote or a
+// brace does not end the label set early.
+func TestValidateText_OpenMetricsEdgeCases(t *testing.T) {
+	text := "# TYPE iam_event_consumer_build info\n" +
+		"# HELP iam_event_consumer_build Build of the consumer.\n" +
+		"\n" +
+		"# a free-form comment\n" +
+		"iam_event_consumer_build_info{" + ids + `,commit="a\"b}c"} 1` + "\n" +
+		"# TYPE iam_event_consumer_jobs counter\n" +
+		"iam_event_consumer_jobs_total{" + ids + "} 3\n" +
+		"# EOF\n"
+	rep, err := obsregistry.Default().ValidateText(strings.NewReader(text), obsregistry.Options{})
+	if err != nil {
+		t.Fatalf("ValidateText: %v", err)
+	}
+	if _, ok := rep.Tiers["iam_event_consumer_build_info"]; !ok {
+		t.Fatalf("info family not normalized to iam_event_consumer_build_info: tiers %v", rep.Tiers)
+	}
+	// An OpenMetrics counter family is declared without _total; its Prometheus name has it.
+	if _, ok := rep.Tiers["iam_event_consumer_jobs_total"]; !ok {
+		t.Fatalf("counter family not normalized to iam_event_consumer_jobs_total: tiers %v", rep.Tiers)
+	}
+}

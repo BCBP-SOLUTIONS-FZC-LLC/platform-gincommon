@@ -6,7 +6,7 @@ flowchart TD
     C -- no --> D["metrics.MustInitFromConfig<br/>ApplyEnvDefaults → resolve → InitWithOptions<br/>same identity: no-op · unknown version inherits/upgrades<br/>different identity: panic ErrIdentityMismatch"]
     D --> E["resolve telemetry: cfg.Tracing over OTEL_* env<br/>+ Domain / Environment for the trace resource"]
     E --> F["ensureInitTelemetry<br/>install when no provider or only a provisional one<br/>else keep it (upgrade its error logger)"]
-    F --> G["return [<br/>PanicRecovery(logger)<br/>RequestID<br/>Tracing(ServiceName)<br/>CorrelationHeaders<br/>Metrics(logger)<br/>Logging(logger)<br/>+ Timeout(RequestTimeout) when > 0  — innermost<br/>]"]
+    F --> G["return [<br/>PanicRecovery(logger)<br/>RequestID<br/>Tracing(ServiceName)<br/>CorrelationHeaders<br/>Metrics(logger)<br/>Logging(logger)<br/>+ Timeout(RequestTimeout) when > 0<br/>+ ProblemMiddleware (global error handler) — innermost<br/>]"]
 
     B -- "ProtectedMiddlewares(cfg)" --> H["service.NewContextService()"]
     H --> I["return [<br/>RequireAuth(logger)<br/>ContextMiddleware(ctxSvc, logger)<br/>]"]

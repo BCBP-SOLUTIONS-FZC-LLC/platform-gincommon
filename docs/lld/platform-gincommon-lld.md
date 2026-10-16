@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 1.7 | 2026-10-16 | **Alignment with v2.0.0 and current status.** Package layout, dependency rules, symbol catalogue (`pkg/problem`, P-*), status map, log catalogue (`problem response`), §8.3 and §17.1 rewritten for RFC 9457 problems. New tests (§14): error contract, uninitialised-metrics pass-through, stream-timeout client cancel, custom validator, authz error logging; coverage 99.6%. Security: `go1.26.9`, `golang.org/x/net` v0.60.0 (§3.1). §18.1 consumer pins and v2 migration status; §19.2 v1.x → v2.0.0. OQ-8 resolved; OQ-24 (cause logging for unclassified 500s) added. |
 | 1.6 | 2026-10-16 | **RFC 9457 Problem Details (v2.0.0).** Every HTTP error is `application/problem+json` (§4.3). New `pkg/problem` (stdlib-only model, type registry, builder, error types, trace-id resolution, client decoder, OpenAPI components). The global error handler `ProblemMiddleware` is the innermost `ObservabilityMiddlewares` handler. `gincommon.ErrorResponse` was removed. The module path is now `/v2`. Full contract: `docs/problem-details/`. |
 | 1.5 | 2026-10-02 | **LLD-vs-code verification.** Three independent claim-by-claim checks against the code. ~45 document corrections (log field names, sanitisation scope, context-error statuses, gRPC check order, catalogue gaps, release/CI details, consumer usage). Six code gaps found; five fixed: gRPC authz logs carry `tenant_id`; `PropagateIdentityHeaders` removes a stale `x-tenant-roles`; gRPC span panic values are sanitized; every HTTP 500 body is `internal server error`; an empty `RegisterKnownMethods` no longer maps every method to `unknown`. The sixth (OTel error-logger downgrade) is recorded as OQ-22. New open items OQ-18–23, including OQ-18: all 11 services register `TimeoutMiddleware` outermost. |
 | 1.4 | 2026-10-02 | **Production-readiness review 3 fixes.** Panic after a partial write now aborts the connection (bare `http.ErrAbortHandler`), so the client never sees a complete 200 (§8.6). A wrapped `ErrAbortHandler` is re-panicked as the bare sentinel, because net/http compares by identity. An established `unknown` build version is upgraded by a later real version, so startup no longer depends on whether HTTP or gRPC is built first (§6.2). Tracing `Shutdown` keeps the delegating provider installed (§6.3). The gRPC alias is renamed `RequestContextData` to match gincommon (§5.3). gRPC timeout interceptors are documented and tested as **innermost** (§8.8). |
@@ -27,7 +28,7 @@
 | 1.1 | 2026-10-01 | **Enterprise Platform Observability Standard.** Central registry (`registry.json`) importing platform-events and platform-pgcommon verbatim; `platform_*` collectors built from it; `Config.Domain` required; pre-standard `http_*`/`grpc_*`/`build_info` names removed with no compatibility period; `pkg/obsregistry` + `cmd/metricslint`; reference recording rules and SLO alerts; CI/CD rebuilt on the IAM pipeline model. |
 | 1.0 | 2026-08-18 | `v1.3.0` baseline — HTTP + gRPC middleware stacks, demo RBAC, OTel setup, Prometheus metrics (pre-standard names). |
 
-> **Scope note.** This LLD specifies what `v1.4.0` *is*, as verified against the code. Where this document and the code disagree, the code (and its tests) win, and this document is wrong. File an update. Where this document and the observability standard disagree on a metric contract, the registry wins (§7.4).
+> **Scope note.** This LLD specifies what `v2.0.0` *is*, as verified against the code. Where this document and the code disagree, the code (and its tests) win, and this document is wrong. File an update. Where this document and the observability standard disagree on a metric contract, the registry wins (§7.4).
 
 ### Table of Contents
 
@@ -155,6 +156,7 @@ platform-gincommon/
 │   │   ├── server.go                      # RegisterKnownMethods, RegisterHealth, Timeout*, *Client*Interceptor
 │   │   ├── metrics.go                     # MetricsRegisterer, MetricsConstLabels
 │   │   └── types.go                       # aliases: Authorizer, RequestContextData, Logger, DemoRBAC, ErrForbidden (no Tracer/metrics aliases)
+│   ├── problem/problem.go                 # RFC 9457 facade over internal/problem (stdlib only), §5.3 P-*
 │   ├── obsregistry/obsregistry.go         # Default, Parse, Validate, ValidateText, ServicePrefix, Severity, Rule*
 │   └── logger/logger.go                   # NewLogger, Default
 ├── internal/
@@ -165,7 +167,8 @@ platform-gincommon/
 │   ├── adapter/
 │   │   ├── inbound/
 │   │   │   ├── http/middleware/           # recovery, request_id, tracing, correlation(_headers), metrics, log_limiter,
-│   │   │   │                              #   logging, timeout, auth, identity, context, authz, keys
+│   │   │   │                              #   logging, timeout, auth, identity, context, authz, keys,
+│   │   │                              #   problem (ProblemMiddleware, WriteProblem, ClassifyError), binding (BindingError)
 │   │   │   ├── grpc/middleware/           # recovery, request_id, tracing, metrics, logging, auth, context, authz,
 │   │   │   │                              #   timeout, client, status, stream, keys
 │   │   │   └── label/                     # HTTPRoute, GRPCMethod, RegisterGRPCMethods
@@ -173,6 +176,7 @@ platform-gincommon/
 │   │       ├── metrics/                   # metrics.go (init), record.go, outcome.go, buckets.go, message_size.go, errorlog.go
 │   │       ├── otel/                      # provider.go (delegating), setup.go, env.go, telemetry_config.go
 │   │       └── logger/                    # zap.go (adapter), fields_pool.go
+│   ├── problem/                           # problem.go, types.go (registry), errors.go (FromError), builder.go, trace.go, client.go, openapi.go + openapi.yaml
 │   ├── obsregistry/                       # registry.json, registry.go, validate.go, refs.go, openmetrics.go, inventory.go, cli.go
 │   ├── config/env.go                      # env loading + normalisation
 │   └── server/                            # demo router
@@ -189,6 +193,7 @@ platform-gincommon/
 ```
 require (
     github.com/gin-gonic/gin                                            v1.12.0
+    github.com/go-playground/validator/v10                              v10.30.2 // validationErrors mapping (Gin's validator)
     github.com/google/uuid                                              v1.6.0
     github.com/joho/godotenv                                            v1.5.1   // demo + tests only
     github.com/prometheus/client_golang                                 v1.24.1
@@ -201,10 +206,11 @@ require (
     go.uber.org/zap                                                     v1.28.0
     google.golang.org/grpc                                              v1.84.0
     google.golang.org/protobuf                                          v1.36.12
+    gopkg.in/yaml.v3                                                    v3.0.1   // tests only (OpenAPI schema check)
 )
 ```
 
-The `go 1.26.0` directive (with `toolchain go1.26.9`) keeps consumers on any Go 1.26.x; CI builds with 1.26.9 via `setup-go`'s `go-version-file`. golangci-lint is a `go tool` dependency.
+The `go 1.26.0` directive (with `toolchain go1.26.9`) keeps consumers on any Go 1.26.x; CI builds with 1.26.9 via `setup-go`'s `go-version-file`. golangci-lint is a `go tool` dependency. `golang.org/x/net` (indirect, via gRPC/OTLP) is held at v0.60.0 and the toolchain at 1.26.9 for the 2026-10 `net/http` / HTTP/2 / `crypto/tls` advisories (GO-2026-6603 … -6617); `make vuln-check` and CI's govulncheck gate on them.
 
 ### 3.2 Dependency rules
 
@@ -213,13 +219,14 @@ The `go 1.26.0` directive (with `toolchain go1.26.9`) keeps consumers on any Go 
 | `core/domain` | nothing |
 | `core/port` | `domain` |
 | `core/service` | `domain` (`RBACService` satisfies `port.Authorizer` structurally) |
-| `adapter/inbound/{http,grpc}/middleware` | `label`, `adapter/outbound/metrics`, `service`, `port`, `domain` |
-| `adapter/inbound/label`, `adapter/outbound/logger`, `obsregistry`, `config` | nothing |
+| `adapter/inbound/{http,grpc}/middleware` | `label`, `adapter/outbound/metrics`, `service`, `port`, `domain`; HTTP also `internal/problem` |
+| `adapter/inbound/label`, `adapter/outbound/logger`, `obsregistry`, `problem`, `config` | nothing (`problem` is standard library only) |
 | `adapter/outbound/metrics` | `obsregistry`, `config` |
 | `adapter/outbound/otel` | `config`, `port` |
-| `pkg/gincommon` | the above + `pkg/logger`; **never** `pkg/grpccommon` |
+| `pkg/gincommon` | the above + `pkg/logger`, `pkg/problem`; **never** `pkg/grpccommon` |
 | `pkg/grpccommon` | the above; **never** `pkg/gincommon` |
 | `pkg/obsregistry`, `cmd/metricslint` | `internal/obsregistry` only |
+| `pkg/problem` | `internal/problem` only |
 | `pkg/logger` | `adapter/outbound/logger`, `port` |
 | `internal/server` (demo) | `pkg/gincommon`, `adapter/outbound/logger`, `config`, `port` |
 
@@ -341,14 +348,14 @@ Key label vocabularies:
 
 | # | Signature | Behaviour |
 |---|---|---|
-| G-1 | `type Config struct{ Logger Logger; ServiceName, BuildVersion, Domain, Environment string; Tracing *TracingOptions; RequestTimeout time.Duration }` | Stack configuration (§12.2) |
+| G-1 | `type Config struct{ Logger Logger; ServiceName, BuildVersion, Domain, Environment string; Tracing *TracingOptions; RequestTimeout time.Duration; ProblemTypeBase string }` | Stack configuration (§12.2) |
 | G-2 | `type TracingOptions struct{ Endpoint string; Insecure *bool; SampleRatio *float64; EnableBaggage *bool; IgnoreRemoteParentSampled *bool }` | Per-field override of `OTEL_*` env (empty `Endpoint` / nil pointer = env) |
 | G-3 | `func ObservabilityMiddlewares(cfg Config) []gin.HandlerFunc` | §8.1. Panics on empty `ServiceName`, invalid/conflicting identity |
 | G-4 | `func ProtectedMiddlewares(cfg Config) []gin.HandlerFunc` | `[RequireAuth(cfg.Logger), ContextMiddleware(ctxSvc, cfg.Logger)]` |
 | G-5 | `func DefaultMiddlewares(cfg Config) []gin.HandlerFunc` | G-3 + G-4 |
 | G-6 | `func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc` | §8.7; `≤ 0` is a no-op |
 | G-7 | `func HealthHandler() gin.HandlerFunc` | `200 {"status":"ok"}` |
-| G-8 | `AbortWithProblem(c, err)`, `ClassifyError(err)`, `BindingError(err)`, `ShouldBindJSON(c, obj)`, `ShouldBind(c, obj)`; problems are `pkg/problem.Problem` | §4.3 |
+| G-8 | `func AbortWithProblem(c *gin.Context, err error)` · `func ClassifyError(err error) *problem.Error` · `func BindingError(err error) *problem.Error` · `func ShouldBindJSON(c *gin.Context, obj any) error` · `func ShouldBind(c *gin.Context, obj any) error` | §4.3. `AbortWithProblem` writes now (only aborts if already written; nil err → 500); `ClassifyError`: `*problem.Error` as is → `validator.ValidationErrors` 400 → `ErrForbidden` 403 → `problem.FromError`; `ShouldBind*` return nil or a `BindingError` |
 | G-9 | `func PropagateHeaders(c *gin.Context, req *http.Request)` | Sets `traceparent`/`tracestate` + `x-request-id`. No identity, no baggage. Nil `c`/`req` → no-op; nil `req.Header` allocated |
 | G-10 | `func PropagateIdentityHeaders(c *gin.Context, req *http.Request)` | G-9 + `x-user-id`/`x-tenant-id`/`x-tenant-roles` from the `RequestContext` (set, not appended; a pre-existing `x-tenant-roles` is removed when the caller has no roles) + full propagator output (baggage) |
 | G-11 | `func RequirePermission(action, resource string, auth Authorizer) gin.HandlerFunc` | §8.4, no logging |
@@ -370,6 +377,23 @@ Key label vocabularies:
 | G-27 | `func (*SpanTracer) StartSpan(ctx context.Context, name string) (context.Context, func())` | The hook pgcommon calls |
 | G-28 | `var ErrServiceNameRequired` | Returned by G-16 |
 | G-29 | `NewHistogramVec(..., buckets=nil, ...)` | nil buckets default to the `request_duration` preset |
+
+#### `pkg/problem`
+
+Standard library only; a facade over `internal/problem`. Contract: [`docs/problem-details/`](../problem-details/README.md).
+
+| # | Signature | Behaviour |
+|---|---|---|
+| P-1 | `type Problem struct{ Type, Title string; Status int; Detail, Instance, TraceID, ErrorCode, TenantID, Timestamp string; ValidationErrors []FieldError }` · `type FieldError struct{ Field, Message string }` | JSON members `type,title,status,detail,instance,traceId,errorCode,tenantId,timestamp,validationErrors`; optional ones `omitempty` |
+| P-2 | `type Type struct{ Domain, Name, Title string; Status int; Code string }` · `Type.ID()` · `Type.URI(base)` · `TypeURI` · `DefaultTypeBase` | `{base}/{domain}/{name}`; zero Type → `about:blank` |
+| P-3 | `TypeBadRequest` … `TypeGatewayTimeout` (15) · `PlatformTypes()` · `TypeForStatus(status)` | registry of record `docs/problem-details/registry.md` (drift-tested); a bare 400 → `bad-request`; unknown status → `about:blank` + status text |
+| P-4 | `func NewType(domain, name, title string, status int, code string) (Type, error)` · `MustType` · `ErrInvalidType` | kebab slugs, 4xx/5xx, upper-snake code; `platform` domain reserved |
+| P-5 | `type Error struct{ Type Type; Detail, Code string; ValidationErrors []FieldError; Err error }` · `NewError`, `NewValidationError`, `NewBadRequestError`, `NewUnauthorizedError`, `NewForbiddenError`, `NewNotFoundError`, `NewConflictError`, `NewBusinessRuleError`, `NewRateLimitError`, `NewNotImplementedError`, `NewServiceUnavailableError`, `NewInternalError` · `WithCode`/`WithCause`/`WithFields` | `Err` is the cause: `Unwrap`, logs only, never rendered |
+| P-6 | `func FromError(err error) *Error` | `*Error` in chain as is; `ErrUnsupported` 501; `DeadlineExceeded` 503 `REQUEST_TIMEOUT`; `*http.MaxBytesError` 413; else 500 without detail |
+| P-7 | `NewBuilder(t)` · `BuilderFor(err)` · `.TypeBase/.Detail/.ErrorCode/.Instance/.TraceID/.TenantID/.ValidationErrors/.Timestamp` · `.Build() Problem` | `internal-error` never carries a detail or validationErrors |
+| P-8 | `ResolveTraceID(traceparent, requestID, spanTraceID)` · `TraceIDFromTraceparent` · `SanitizeRequestID` · `NewTraceID` | platform-pgcommon-py's order and vectors |
+| P-9 | `FromResponse(*http.Response) (*Problem, error)` · `Decode(io.Reader)` · `IsProblemContentType` · `ErrNotProblem` | clients; unknown members ignored; body read capped at 1 MiB |
+| P-10 | `OpenAPIComponents() []byte` · `StandardResponses() map[int]string` | shared `ProblemDetails`/`ValidationError` schemas and the 400/401/403/404/409/422/429/500 responses |
 
 #### `pkg/grpccommon`
 
@@ -459,18 +483,21 @@ Key label vocabularies:
 
 ### 5.5 Status mapping summary
 
-| Condition | HTTP | gRPC |
+| Condition | HTTP (status · problem `type` · `errorCode`) | gRPC |
 |---|---|---|
-| Panic (not abort) | 500 | `Internal` |
+| Panic (not abort) | 500 · `platform/internal-error` · `INTERNAL_ERROR` | `Internal` |
 | Client abort (`ErrAbortHandler`) | connection aborted; recorded as 499 when nothing was written, else the written status | — |
-| Missing / invalid / ambiguous identity | 401 | `Unauthenticated` |
-| Invalid roles | 401 | `Unauthenticated` |
-| `BuildContext` sentinel (missing user / tenant id) | 401 | `Unauthenticated` |
-| other `BuildContext` failure | 400 `invalid request context` | `InvalidArgument "invalid request context"` |
-| Authorizer denies (`ErrForbidden`) | 403 | `PermissionDenied` |
-| Authorizer error / nil authorizer | 500 | `Internal` |
-| No `RequestContext` at authz (misordered) | 500 | `FailedPrecondition` |
-| Timeout | 503 | `DeadlineExceeded` |
+| Client cancel recorded via `c.Error(context.Canceled)` | 499, no body | — |
+| Missing / invalid / ambiguous identity | 401 · `platform/unauthorized` · `UNAUTHORIZED` | `Unauthenticated` |
+| Invalid roles | 401 · `platform/unauthorized` · `UNAUTHORIZED` | `Unauthenticated` |
+| `BuildContext` sentinel (missing user / tenant id) | 401 · `platform/unauthorized` · `UNAUTHORIZED` | `Unauthenticated` |
+| other `BuildContext` failure | 400 · `platform/bad-request` · `INVALID_REQUEST_CONTEXT` | `InvalidArgument "invalid request context"` |
+| Authorizer denies (`ErrForbidden`) | 403 · `platform/forbidden` · `FORBIDDEN` | `PermissionDenied` |
+| Authorizer error / nil authorizer | 500 · `platform/internal-error` (no detail) | `Internal` |
+| No `RequestContext` at authz (misordered) | 500 · `platform/internal-error` (no detail) | `FailedPrecondition` |
+| Timeout | 503 · `platform/service-unavailable` · `REQUEST_TIMEOUT` | `DeadlineExceeded` |
+| Unregistered route / method | 404 `ROUTE_NOT_FOUND` / 405 `METHOD_NOT_ALLOWED` | — |
+| Handler `c.Error(err)` | `ClassifyError(err)` (G-8, P-6) | — |
 
 ---
 
@@ -611,6 +638,8 @@ Buckets: `request_duration` = `0.001 … 10` s (18 bounds); `payload_size` = `12
 | `authz: access denied` / `grpc authz: access denied` | Warn | AuthZ | `tenant_id`, `user_id`, `roles`, `action`, `resource` |
 | `authz: internal authorization error` / `grpc authz: internal error` | Error | AuthZ | identity, `action`, `resource`, sanitized `error` |
 | `authz: request context missing` / `authz: invalid request context type` | Error | HTTP AuthZ | misordered chain (ORD-3) / wrong context value type |
+| `problem response` | Warn | `WriteProblem` (every HTTP problem) | `traceId`, `type`, `status`, `errorCode`, `service` (when set), `tenantId` (verified only). Never detail, instance or identity; a panicking logger is ignored |
+| `authz: no authorizer configured` | Error | HTTP AuthZ | `action`, `resource` |
 | `panic recovered` | Error | HTTP recovery | `panic` (sanitized), `stack`, `method`, `route`, `path` (sanitized raw path), `status`, IDs, `duration_ms` |
 | `grpc panic recovered` | Error | gRPC recovery | `method` (raw `FullMethod`), `panic`, `stack` only |
 | `request aborted` | Debug | HTTP recovery | `method`, `route`, `path`, IDs |
@@ -690,10 +719,10 @@ Diagram: [`auth-context-flow.mmd`](../architecture/mermaid/auth-context-flow.mmd
 
 | Input | HTTP outcome | gRPC outcome | Log |
 |---|---|---|---|
-| no `x-user-id` | `401 missing or invalid authentication headers` | `Unauthenticated "missing x-user-id"` | HTTP: `auth: request rejected` + `claimed_*`. gRPC: only `grpc_request` at Warn (no `claimed_*`) |
+| no `x-user-id` | `401` problem, detail `Missing or invalid authentication headers.` | `Unauthenticated "missing x-user-id"` | HTTP: `auth: request rejected` + `claimed_*`. gRPC: only `grpc_request` at Warn (no `claimed_*`) |
 | `x-user-id: "  "` | `401` (same message) | `Unauthenticated "blank x-user-id"` | Warn |
-| two `x-tenant-id` values | `401 ambiguous x-tenant-id header` | `Unauthenticated "ambiguous x-tenant-id metadata"` | Warn |
-| roles header of 5000 bytes | `401 invalid tenant roles` | `Unauthenticated "invalid tenant roles"` | Warn, `claimed_*` |
+| two `x-tenant-id` values | `401` problem, detail `Ambiguous x-tenant-id header.` | `Unauthenticated "ambiguous x-tenant-id metadata"` | Warn |
+| roles header of 5000 bytes | `401` problem, detail `Invalid tenant roles.` | `Unauthenticated "invalid tenant roles"` | Warn, `claimed_*` |
 | `/grpc.health.v1.Health/Check`, no identity | n/a | handler runs | `grpc_request` Info |
 | `/grpc.health.v1.Health/CheckX`, no identity | n/a | `Unauthenticated` | Warn |
 
@@ -883,6 +912,7 @@ All race-sensitive suites (`test/unit/grpc`, `TestGRPC_*`, `test/unit/otel`, `te
 | SEC-4 | Identity is forwarded downstream only through explicit identity helpers, and only to trusted internal services |
 | SEC-5 | Unverified identity never appears in verified log fields |
 | SEC-6 | Only `/grpc.health.v1.Health/{Check,Watch,List}` bypass auth (exact match). A prefix match would be a bypass behind `UnknownServiceHandler` |
+| SEC-7 | Error responses never leak internals. A 5xx `internal-error` has no `detail` (enforced in `Builder.Build`); validation messages never echo the rejected value; `instance` omits the query string; `tenantId` comes only from the verified `RequestContext` (never on a 401); a client `x-request-id` is reflected as `traceId` only when it matches `[A-Za-z0-9._:-]{1,128}` |
 
 ### 10.2 Network expectations (consumer responsibility)
 
@@ -989,6 +1019,7 @@ Boolean `OTEL_*` values are case-insensitive (`true`/`1`/`yes`, `false`/`0`/`no`
 | `Logger` | no | nil (no logging) | — |
 | `Tracing` | no | env | per-field overrides |
 | `RequestTimeout` (HTTP) | no | 0 (off) | `> 0` appends the timeout innermost |
+| `ProblemTypeBase` (HTTP) | no | `https://errors.company.com` (`problem.DefaultTypeBase`) | trailing `/` ignored; must be the same for every service of an organisation |
 
 ---
 
@@ -1010,7 +1041,7 @@ Two-stage `Dockerfile`: digest-pinned `golang:1.26.9-alpine` builder; digest-pin
 
 ### 13.3 Compatibility and release gates
 
-- SemVer over `pkg/*` ([VERSIONING.md](../../VERSIONING.md)); `v1.4.0` is a recorded exception (breaking in a MINOR).
+- SemVer over `pkg/*` ([VERSIONING.md](../../VERSIONING.md)); `v2.0.0` (RFC 9457) is a proper MAJOR with the `/v2` module path; `v1.4.0` was a recorded exception (breaking in a MINOR).
 - `verify-changelog-entry.sh`: a `## [X.Y.Z]` section must exist (fixed-string match).
 - `verify-release-tag.sh`: the tag points at HEAD (`git tag --points-at`) and is reachable from `origin/main`.
 - `release.yml` mirrors platform-pgcommon's:
@@ -1029,16 +1060,18 @@ Two-stage `Dockerfile`: digest-pinned `golang:1.26.9-alpine` builder; digest-pin
 
 | Package | Covers |
 |---|---|
-| `middleware` | every HTTP middleware; correlation headers on `w.Result().Header`; abort and identity cases (`abort_identity_test.go`); roles limits |
-| `grpc` | interceptors, health/timeout/roles (`health_timeout_roles_test.go`), hardening, shutdown |
-| `gincommon` | stack constructors, propagation, tracing init and delegation, consumer API, full-chain abort |
-| `metrics`, `platformmetrics`, `metricshandler`, `uninit`, `identity` | init, recording, registry compliance of gincommon's own metrics, version rules, `/metrics` error handling, identity contract |
+| `middleware` | every HTTP middleware; correlation headers on `w.Result().Header`; abort and identity cases (`abort_identity_test.go`); roles limits; `ProblemMiddleware`/`WriteProblem`/`BindingError` (`problem_test.go`, `binding_pointer_test.go`); authz error logging (`authz_logging_test.go`) |
+| `grpc` | interceptors, health/timeout/roles (`health_timeout_roles_test.go`), stream-timeout client cancel (`stream_timeout_cancel_test.go`), hardening, shutdown |
+| `gincommon` | stack constructors, propagation, tracing init and delegation, consumer API, full-chain abort; RFC 9457 through the full stack (`errors_test.go`) |
+| `metrics`, `platformmetrics`, `metricshandler`, `uninit`, `identity` | init, recording, registry compliance of gincommon's own metrics, version rules, `/metrics` error handling, identity contract; `uninit/passthrough_test.go`: HTTP metrics middleware and gRPC metrics interceptors pass through before init (runs first by file order; package valid only with `-count=1`) |
+| `problem` | type registry invariants and `registry.md` drift, builder, `FromError`, trace-id vectors (shared with pgcommon-py), client decoding, OpenAPI schema vs struct |
+| `customvalidator` | own process: a service-replaced `binding.Validator` is left alone and its errors become `validation-failed` without the message |
 | `obsregistry` | parse strictness, every rule, `refs` (limits, exit codes, skipped dirs), CLI, OpenMetrics input |
 | `otel`, `config`, `logger`, `domain`, `service`, `label`, `server` | provider lifecycle, env normalisation, log options, validation, sanitisation, label bounding, demo router |
 
 ### 14.2 Integration tests (`test/integration/`, in-process)
 
-HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufconn server (`grpc_server_test.go`). Full-chain HTTP cases `TestObservabilityMiddlewares_ErrAbortHandler_FullChain`, `TestProtectedMiddlewares_RepeatedIdentityHeader401` and `TestTimeoutMiddleware_KeepsStatusOnlyResponse` live in `test/unit/gincommon/abort_chain_test.go`.
+HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufconn server (`grpc_server_test.go`). Full-chain HTTP cases `TestObservabilityMiddlewares_ErrAbortHandler_FullChain`, `TestProtectedMiddlewares_RepeatedIdentityHeader401` and `TestTimeoutMiddleware_KeepsStatusOnlyResponse` live in `test/unit/gincommon/abort_chain_test.go`. `problem_details_test.go`: problems pass through a reverse-proxy gateway unchanged (status, media type, body, `X-Trace-ID`), a gateway-generated problem, and `problem.FromResponse`.
 
 ### 14.3 Contract tests
 
@@ -1068,7 +1101,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | T-9 | `TestProtectedMiddlewares_RepeatedIdentityHeader401`, `TestGRPC_AmbiguousIdentityRejected` | SEC-3 |
 | T-10 | `TestGRPC_UnknownMethodBoundedLabel` | OBS-2 |
 
-**Coverage.** Measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` (tests live in a separate tree). The CI gate is ≥ 98% (`coverage-gate.sh`); the current total is 99.0%.
+**Coverage.** Measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` (tests live in a separate tree). The CI gate is ≥ 98% (`coverage-gate.sh`); the current total is 99.6%.
 
 ---
 
@@ -1081,7 +1114,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | `user_id`, `tenant_id` (opaque gateway identifiers) | `RequestContext`, logs (verified or `claimed_*`), authz audit entries, outbound identity headers (opt-in) | Never metric labels (prohibited) |
 | Roles | `RequestContext`, authz denial logs | Never metric labels |
 | Client IP | `RequestContext`, access log `client_ip` | Prohibited as a label |
-| Request ID, trace ID | logs, spans, response headers, error envelope | Prohibited as labels |
+| Request ID, trace ID | logs, spans, response headers, problem `traceId` | Prohibited as labels |
 | Request/response bodies | never logged or exported | Sizes only (histograms); gRPC sizes come from `proto.Size` on the decoded message |
 | URL path | sanitized `path` in panic logs; raw `url.path` span attribute (truncated to 512 bytes) | Never a metric label; `route` template instead |
 | Header values | sanitized, truncated in logs | Sensitive keys redacted |
@@ -1105,10 +1138,10 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | OQ-2 | **`_bytes` histogram exception** to the `_seconds` suffix rule (registry `unit: bytes`) | Observability governance | Open |
 | OQ-3 | **Domain vocabulary spelling** (`tender_management`) | Observability governance | Open |
 | OQ-4 | **Ownerless Tier 2 entries** (`iam_auth_events_total`, `iam_tenant_resolution_total`, `iam_identity_sync_total`, `iam_realm_operations_total`, `iam_rls_violations_total`, `iam_auth_session_revoke_failed_total`, `iam_lifecycle_event_skipped_total`, `iam_lifecycle_event_lag_seconds`) need an owner before ratification | IAM + governance | Open |
-| OQ-5 | **Versioning of the breaking release.** `v2.0.0` with a `/v2` path vs `v1.4.0` with a written exception | Platform team | **Resolved** — `v1.4.0` + recorded exception (VERSIONING.md) |
+| OQ-5 | **Versioning of the breaking release.** `v2.0.0` with a `/v2` path vs `v1.4.0` with a written exception | Platform team | **Resolved** — `v1.4.0` + recorded exception (VERSIONING.md) For v1.4.0. The next breaking change (RFC 9457) shipped as `v2.0.0` with the `/v2` path |
 | OQ-6 | **`PropagateHeaders` identity removal in consumers.** Only `iam-delegation` calls it (4 outbound clients: tender, catalogadmin, userprofile, orgmembership); any of those that needs identity must switch to `PropagateIdentityHeaders` on upgrade | iam-delegation owners | Open |
 | OQ-7 | **`alpine:3.21` end of support (~Nov 2026).** Bump the demo runtime image and re-pin (`make pin-base-images`, requires docker) | Library maintainers | Open |
-| OQ-8 | **`platform-fastapicommon` registry copy** must be re-synced (the `payload_size` buckets gained 4 MiB / 16 MiB) | Python port owners | Open |
+| OQ-8 | **`platform-fastapicommon` registry copy** must be re-synced (the `payload_size` buckets gained 4 MiB / 16 MiB) | Python port owners | **Resolved** 2026-10-16 — re-vendored in platform-fastapicommon#20 (its drift test passes) |
 | OQ-9 | **`OTEL_TRACES_SAMPLER` not honoured** (only ratio + remote-parent toggle) | Library maintainers | Deferred |
 | OQ-10 | **gRPC client spans.** Client interceptors propagate context but create no client spans | Library maintainers | Deferred |
 | OQ-11 | **Per-server method allow-list.** The list is process-wide; a per-server variant would remove ORD-6's multi-server footgun | Library maintainers | Deferred |
@@ -1123,6 +1156,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | OQ-21 | **Whitespace-only `APP_ENV` does not fall through to `ENVIRONMENT`** (raw non-empty check before normalisation) and fails startup | Library maintainers | Deferred |
 | OQ-22 | **A later `InitTracing` without a logger resets the OTel error handler to stderr** after `ObservabilityMiddlewares` set `Config.Logger` | Library maintainers | Deferred |
 | OQ-23 | **C1 control characters (U+0080–U+009F) are accepted** in identity headers | Library maintainers | Deferred |
+| OQ-24 | **Cause logging for unclassified 500s.** A handler's `c.Error(err)` that maps to `internal-error` is rendered without detail, and the error handler does not log `err` (its text may carry SQL or PII). Services that rely on `c.Error` alone lose the root cause. Option: log a sanitized `error` field on the `problem response` line for 5xx only | Platform team | Open |
 | OQ-17 | **gRPC roles parity.** Repeated `x-tenant-roles` are joined (not rejected); gateways must strip client-supplied roles | Gateway owners | Accepted (documented, SEC-1) |
 
 ---
@@ -1133,19 +1167,22 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 
 All are RFC 9457 problems (§4.3).
 
-| HTTP | `error` | Produced by | Cause |
-|---|---|---|---|
-| 401 | `missing or invalid authentication headers` | `RequireAuth`, `ContextMiddleware` | identity header missing, blank, > 256 bytes, or control characters |
-| 401 | `ambiguous x-user-id header` / `ambiguous x-tenant-id header` | `RequireAuth`, `ContextMiddleware` | more than one value |
-| 401 | `invalid tenant roles` | `ContextMiddleware` | roles header > 4096 bytes or > 64 roles |
-| 401 | `missing tenant id` / `missing user id` | `ContextMiddleware` | `BuildContext` sentinels |
-| 400 | `invalid request context` | `ContextMiddleware` | other `ContextBuilder` failure (detail in the warn log only) |
-| 403 | `forbidden` | `AuthZMiddleware` | `Authorizer` returned `ErrForbidden` |
-| 500 | `request context missing` | `AuthZMiddleware` | `RequirePermission` before the protected chain (ORD-3) |
-| 500 | `invalid request context` | `AuthZMiddleware` | wrong type stored under the context key |
-| 500 | `internal server error` | `AuthZMiddleware`, `PanicRecoveryMiddleware` | authorizer error, nil authorizer, or panic |
-| 503 | `request timeout` | `TimeoutMiddleware` | `DeadlineExceeded` with nothing written |
-| — (connection aborted) | — | recovery | `http.ErrAbortHandler`, or a panic after a partial write |
+| HTTP | `type` · `errorCode` | `detail` | Produced by | Cause |
+|---|---|---|---|---|
+| 401 | `platform/unauthorized` · `UNAUTHORIZED` | `Missing or invalid authentication headers.` | `RequireAuth`, `ContextMiddleware` | identity header missing, blank, > 256 bytes, or control characters |
+| 401 | same | `Ambiguous x-user-id header.` / `Ambiguous x-tenant-id header.` | `RequireAuth`, `ContextMiddleware` | more than one value |
+| 401 | same | `Invalid tenant roles.` | `ContextMiddleware` | roles header > 4096 bytes or > 64 roles |
+| 401 | same | `Missing tenant id.` / `Missing user id.` | `ContextMiddleware` | `BuildContext` sentinels |
+| 400 | `platform/bad-request` · `INVALID_REQUEST_CONTEXT` | `Invalid request context.` | `ContextMiddleware` | other `ContextBuilder` failure (detail in the warn log only) |
+| 403 | `platform/forbidden` · `FORBIDDEN` | `The identity is not allowed to perform this operation.` | `AuthZMiddleware` | `Authorizer` returned `ErrForbidden` |
+| 500 | `platform/internal-error` · `INTERNAL_ERROR` | — | `AuthZMiddleware` | `RequirePermission` before the protected chain (ORD-3), wrong context type, nil or failing `Authorizer` |
+| 500 | same | — | `PanicRecoveryMiddleware`, error handler | panic; unclassified handler error |
+| 503 | `platform/service-unavailable` · `REQUEST_TIMEOUT` | `The request timed out.` | `TimeoutMiddleware` | `DeadlineExceeded` with nothing written |
+| 404 / 405 | `platform/not-found` · `ROUTE_NOT_FOUND` / `platform/method-not-allowed` | `No route matches the request path.` / `The route does not support the request method.` | error handler | unregistered route / method (405 needs `HandleMethodNotAllowed`) |
+| 400 | `platform/validation-failed` · `VALIDATION_FAILED` | — or `The request body is empty.` / `…is not valid JSON.` / `…could not be bound.` | `BindingError` | binding / validation failure, with `validationErrors` |
+| — (connection aborted) | — | — | recovery | `http.ErrAbortHandler`, or a panic after a partial write |
+
+All are `application/problem+json` with `instance`, `traceId`, `timestamp`, and `tenantId` for a verified identity (never on a 401).
 
 ### 17.2 gRPC statuses (library-produced)
 
@@ -1203,7 +1240,7 @@ Exit codes: `0` clean, `1` error findings (including `metricslint registry` on a
 
 ### 18.1 Consuming services
 
-All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also uses `pkg/grpccommon` (`Config`, `ObservabilityUnaryInterceptors`, `Shutdown`). All pin `v1.3.0` today and move to `v1.4.0` together. Every service uses `Config`, `ObservabilityMiddlewares`, `TimeoutMiddleware`, `InitTracingFromEnv`, `Shutdown` and `MetricsRegisterer`; beyond that (non-test code, comments excluded):
+All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also uses `pkg/grpccommon` (`Config`, `ObservabilityUnaryInterceptors`, `Shutdown`). As of 2026-10-16 ten pin `v1.6.0` and `iam-org-membership` pins `v1.5.0`; none is on `/v2`. The README's *v2.0.0 migration status* table lists, per service, the `ErrorResponse` uses and hand-written error bodies to replace. Every service uses `Config`, `ObservabilityMiddlewares`, `TimeoutMiddleware`, `InitTracingFromEnv`, `Shutdown` and `MetricsRegisterer`; beyond that (non-test code, comments excluded):
 
 | Service | Also uses |
 |---|---|
@@ -1217,7 +1254,7 @@ All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also u
 | `iam-authz-enrichment` | `grpccommon.ObservabilityUnaryInterceptors` (no `ProtectedMiddlewares`) |
 | `iam-event-consumer` | observability only (no `ProtectedMiddlewares`) |
 
-No service calls `LabeledRegisterer` outside tests. Every service registers `TimeoutMiddleware` **before** `ObservabilityMiddlewares` (the pre-1.4 guidance), which v1.4.0 records incorrectly (§16 OQ-18).
+No service calls `LabeledRegisterer` outside tests. Six services moved to `Config.RequestTimeout`; five (`iam-audit-log`, `iam-authz-enrichment`, `iam-catalog-admin`, `iam-delegation`, `iam-user-profile`) still call `TimeoutMiddleware` directly and must place it after `ObservabilityMiddlewares` (§16 OQ-18).
 
 ### 18.2 platform-events
 
@@ -1229,11 +1266,11 @@ Imported registry: 23 entries it owns (10 proposed, 13 removed). `Config.Tracer 
 
 ### 18.4 platform-fastapicommon
 
-Vendors `registry.json`; must be re-copied on every registry change (OQ-8).
+Vendors `registry.json`; must be re-copied on every registry change (its `test_vendored_registry_is_identical_to_gincommon` fails on drift). Implements the same RFC 9457 contract (`fastapicommon.problem`); its `tests/unit/problem` checks its platform types against this repo's `docs/problem-details/registry.md`.
 
 ### 18.5 platform-interop-tests
 
-Cross-library suite run by CI's `interop` job (reusable workflow pinned to a commit SHA, `GO_PRIVATE_TOKEN`).
+Cross-library suite run by CI's `interop` job (reusable workflow pinned to a commit SHA, `GO_PRIVATE_TOKEN`; the harness itself is always checked out at its `main`). Pair 2's `error_shape` check requires the Go and Python 401 to be the same RFC 9457 problem.
 
 ### 18.6 Dependency table
 
@@ -1244,7 +1281,7 @@ Cross-library suite run by CI's `interop` job (reusable workflow pinned to a com
 | Prometheus | inbound scrape | `/metrics` text exposition |
 | Log pipeline | outbound | stdout / `LOG_FILE` |
 | platform-events, platform-pgcommon | registry import | released contract wins |
-| platform-fastapicommon | registry export | manual copy |
+| platform-fastapicommon | registry export; error contract | manual copy; same RFC 9457 types, codes and messages (interop `error_shape`) |
 
 ---
 
@@ -1265,11 +1302,24 @@ Cross-library suite run by CI's `interop` job (reusable workflow pinned to a com
 
 The legacy → `platform_*` name mapping is [`docs/observability/migration.md`](../observability/migration.md). No compatibility period: nothing was deployed.
 
-### 19.2 Rollback
+### 19.2 `v1.x` → `v2.0.0` (per consuming service)
 
-Pin back to `@v1.3.0` and revert the service's adaptation commit. There is no persisted state to migrate. Dashboards referencing `platform_*` names stop receiving data until re-upgrade.
+| Step | Change | Verification |
+|---|---|---|
+| 1 | `go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@v2.0.0`; rewrite imports to `.../v2/pkg/...` | builds; no v1 path in `go.mod` |
+| 2 | Replace `gincommon.ErrorResponse`, `c.JSON(4xx/5xx, …)`, `c.AbortWithStatusJSON`, `c.AbortWithError`, `c.BindJSON` with `c.Error` + `return`, `AbortWithProblem`, `ShouldBindJSON` | every error response is `application/problem+json` |
+| 3 | Define domain types with `problem.MustType`; register them in `docs/problem-details/registry.md` | `type` URIs stable |
+| 4 | Update clients decoding `error`/`trace_id` to `problem.FromResponse` | branch on `Type`/`ErrorCode` |
+| 5 | OpenAPI: reference the shared `ProblemDetails` schema for 400/401/403/404/409/422/429/500 | spec lint |
+| 6 | Optional: `r.HandleMethodNotAllowed = true` for 405 problems | — |
 
-### 19.3 Registry evolution
+Full detail: [`docs/problem-details/README.md`](../problem-details/README.md#migrating-from-v1x).
+
+### 19.3 Rollback
+
+From v2: pin back to `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@v1.6.0`, restore the v1 import path and revert the service's adaptation commit; clients that already parse problems must still accept the v1 body. From v1.4: pin back to `@v1.3.0` and revert the service's adaptation commit. There is no persisted state to migrate. Dashboards referencing `platform_*` names stop receiving data until re-upgrade.
+
+### 19.4 Registry evolution
 
 A new shared metric is a registry change first (`status: proposed`, owner, labels, buckets), then `make metrics-inventory`, then collector construction. Retiring keeps the entry as `removed` with `replacements`.
 

@@ -5,7 +5,7 @@ graph LR
         own["gincommon entries<br/>platform_http_* · platform_grpc_* · platform_build_info<br/>status proposed, pending governance"]
     end
 
-    subgraph registry["internal/obsregistry/registry.json — embedded, 110 entries"]
+    subgraph registry["internal/obsregistry/registry.json — embedded, 114 entries"]
         entries["metrics: 5 approved · 48 proposed · 57 removed (legacy, with replacements)<br/>labels: vocabulary, patterns, max_values, cardinality<br/>prohibited labels (tenant_id, user_id, ...)<br/>bucket presets · owners · governance_notes"]
         parse["Parse: strict — unknown fields, duplicates,<br/>undefined labels/buckets, legacy without replacement"]
     end

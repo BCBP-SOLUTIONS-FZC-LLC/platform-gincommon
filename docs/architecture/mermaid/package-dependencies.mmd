@@ -6,6 +6,7 @@ graph LR
     gincommon(["pkg/gincommon"])
     grpccommon(["pkg/grpccommon"])
     obsregistry_pkg(["pkg/obsregistry"])
+    problem_pkg(["pkg/problem"])
     logger_pkg(["pkg/logger"])
 
     http_mw(["adapter/inbound/http/middleware"])
@@ -17,6 +18,7 @@ graph LR
     logger_adp(["adapter/outbound/logger"])
 
     obsregistry(["internal/obsregistry"])
+    problem(["internal/problem"])
     config(["internal/config"])
 
     service(["core/service"])
@@ -32,6 +34,7 @@ graph LR
     demo        --> port
 
     gincommon   --> http_mw
+    gincommon   --> problem_pkg
     gincommon   --> metrics
     gincommon   --> otel
     gincommon   --> obsregistry
@@ -51,10 +54,12 @@ graph LR
     grpccommon  --> domain
 
     obsregistry_pkg --> obsregistry
+    problem_pkg --> problem
     logger_pkg  --> logger_adp
     logger_pkg  --> port
 
     http_mw     --> label
+    http_mw     --> problem
     http_mw     --> metrics
     http_mw     --> service
     http_mw     --> port

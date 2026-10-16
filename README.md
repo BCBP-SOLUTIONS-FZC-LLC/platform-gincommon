@@ -151,6 +151,7 @@ platform-gincommon/
 ├── pkg/                                  # Public API — the only packages consumers import
 │   ├── gincommon/                        # HTTP stacks, tracing, metrics API, propagation, type aliases (types.go)
 │   ├── grpccommon/                       # gRPC stacks, client interceptors, health, known-method allow-list, aliases
+│   ├── problem/                          # RFC 9457 Problem Details (stdlib only): model, type registry, Builder, errors, client decoder, OpenAPI
 │   ├── obsregistry/                      # Public face of the registry: Validate, ValidateText, Default, Parse
 │   └── logger/                           # NewLogger, Default
 ├── internal/
@@ -160,13 +161,15 @@ platform-gincommon/
 │   │   └── service/                      # ContextService, RBACService (demo), LogSanitizer
 │   ├── adapter/
 │   │   ├── inbound/
-│   │   │   ├── http/middleware/          # Recovery, RequestID, Tracing, Correlation, Metrics, Logging, Timeout, Auth, Context, AuthZ, 429 log limiter
+│   │   │   ├── http/middleware/          # Recovery, RequestID, Tracing, Correlation, Metrics, Logging, Timeout, Auth, Context, AuthZ, 429 log limiter,
+│   │   │   │                             #   ProblemMiddleware (global error handler), WriteProblem, BindingError
 │   │   │   ├── grpc/middleware/          # gRPC equivalents + client interceptors, stream timeout, status helper
 │   │   │   └── label/                    # Bounded HTTPRoute / GRPCMethod labels, known-method allow-list
 │   │   └── outbound/
 │   │       ├── metrics/                  # platform_* collectors built from the registry; transactional init; atomic collector set
 │   │       ├── otel/                     # Delegating TracerProvider, OTLP exporter, sampler, resource, error handler
 │   │       └── logger/                   # Zap adapter (LOG_LEVEL, LOG_SAMPLING, LOG_FILE tee)
+│   ├── problem/                          # RFC 9457 implementation behind pkg/problem; openapi.yaml (embedded)
 │   ├── obsregistry/                      # registry.json (embedded), validation, refs scanner, OpenMetrics normaliser, CLI
 │   ├── config/                           # Env var loading and normalisation
 │   └── server/                           # Demo router (reference only)
@@ -175,6 +178,8 @@ platform-gincommon/
 │   └── metricslint/                      # Observability-standard CLI
 ├── docs/
 │   ├── observability/                    # The standard as implemented, metric-registry.md (generated), migration, runbooks
+│   ├── problem-details/                  # RFC 9457 contract, error type registry (registry.md)
+│   ├── lld/                              # Low-level design
 │   └── architecture/                     # Architecture docs + Mermaid sources
 ├── docker/                               # Local otel-collector, Tempo, Prometheus (+ rules, promtool tests), Loki, Promtail, Grafana config
 ├── .github/                              # Workflows, shellcheck-clean scripts, dependabot config (disabled)
@@ -189,11 +194,11 @@ platform-gincommon/
 | `core/domain` | Nothing internal |
 | `core/port` | `domain` |
 | `core/service` | `domain` (`RBACService` satisfies `port.Authorizer` structurally) |
-| `adapter/inbound/{http,grpc}/middleware` | `label`, `adapter/outbound/metrics`, `service`, `port`, `domain` |
+| `adapter/inbound/{http,grpc}/middleware` | `label`, `adapter/outbound/metrics`, `service`, `port`, `domain`; HTTP also `problem` |
 | `adapter/outbound/metrics` | `obsregistry`, `config` |
 | `adapter/outbound/otel` | `config`, `port` |
-| `adapter/outbound/logger`, `label`, `obsregistry`, `config` | Nothing internal |
-| `pkg/*` | The composition layer; `pkg/gincommon` and `pkg/grpccommon` never import each other |
+| `adapter/outbound/logger`, `label`, `obsregistry`, `problem`, `config` | Nothing internal |
+| `pkg/*` | The composition layer; `pkg/gincommon` and `pkg/grpccommon` never import each other; `pkg/problem` imports only `internal/problem` |
 
 Generated from `go list`; the full graph is in [ARCHITECTURE.md](ARCHITECTURE.md#package-dependency-graph).
 
@@ -803,10 +808,15 @@ curl -s localhost:8080/panic >/dev/null
 - **`test/integration/grpc_server_test.go`** — a real bufconn gRPC server: health-path near-miss auth bypass, ambiguous identity, request-ID echo, unknown-method labels, stream timeout ending an idle `RecvMsg` loop, and metrics matching the client's `DeadlineExceeded`.
 - **`test/unit/middleware/abort_identity_test.go`** + **`test/unit/gincommon/abort_chain_test.go`** — `http.ErrAbortHandler` through the full chain is a 499 client abort (never a panic or 5xx); a real panic is counted exactly once.
 - **`test/unit/otel`** — the delegating provider: tracers captured before replacement or after `Shutdown` export to the active provider; concurrent swaps under `-race`.
+- **`test/unit/problem`** + **`test/unit/gincommon/errors_test.go`** — the RFC 9457 contract: registry invariants and `docs/problem-details/registry.md` drift, `traceId` vectors shared with pgcommon-py, OpenAPI schema vs struct, and through the full stack: content type, required members, status mapping, validation paths/messages, no 5xx leaks, tenant and trace.
+- **`test/integration/problem_details_test.go`** — problems pass through a reverse-proxy gateway unchanged; a gateway-generated problem; client parsing with `problem.FromResponse`.
+- **`test/unit/customvalidator`** — a service-replaced `binding.Validator` is left alone (own process, because the field-name registration runs once).
+- **`test/unit/uninit`** — metrics before initialisation: constructors fail, middleware and interceptors pass through. Valid only with `-count=1` (it checks process state).
+- **`test/unit/middleware/authz_logging_test.go`** — a failing `Authorizer` is logged sanitized and never reaches the client.
 
 ### Coverage
 
-`make cover-check` (CI: `coverage-gate.sh`, `COVERAGE_THRESHOLD`) fails below **98%** statement coverage measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` — tests live in `test/`, so plain `go test ./...` shows 0% for source packages. The current total is **99.0%**. Use `test/fixtures.MockLogger` to assert structured log output, and `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())` (or the `test/fixtures` helpers) for isolated registries.
+`make cover-check` (CI: `coverage-gate.sh`, `COVERAGE_THRESHOLD`) fails below **98%** statement coverage measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` — tests live in `test/`, so plain `go test ./...` shows 0% for source packages. The current total is **99.6%**. Use `test/fixtures.MockLogger` to assert structured log output, and `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())` (or the `test/fixtures` helpers) for isolated registries.
 
 ---
 
@@ -892,7 +902,8 @@ SemVer over `pkg/*` ([VERSIONING.md](VERSIONING.md)); history in [CHANGELOG.md](
 
 | Version | Status | `go get` | Notes |
 |---|---|---|---|
-| **v1.4.0** | Current | `@v1.4.0` | Breaking changes as a MINOR — [recorded exception](VERSIONING.md#recorded-exceptions); follow [Upgrading to v1.4.0](#10-upgrading-to-v140) |
+| **v2.0.0** | Current | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@v2.0.0` | RFC 9457 error contract, `/v2` module path; follow [Upgrading to v2.0.0](#10-upgrading-to-v200) |
+| v1.4.x–v1.6.x | Previous major | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon@v1.6.0` | Security fixes only; v1.4.0 was a [recorded exception](VERSIONING.md#recorded-exceptions) ([Upgrading to v1.4.0](#11-upgrading-to-v140)) |
 | v1.0.x–v1.3.x | Superseded | `@v1.3.0` | No further releases |
 
 ### Cutting a release
@@ -982,7 +993,7 @@ Two-stage `Dockerfile`: digest-pinned `golang:1.26.9-alpine` builder, digest-pin
 ```bash
 OBSERVABILITY_DOMAIN=iam          # or Config.Domain
 APP_ENV=prod                      # local|dev|test|staging|prod
-BUILD_VERSION=v1.4.0
+BUILD_VERSION=v2.0.0
 OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector.observability:4317
 ```
 
@@ -992,7 +1003,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector.observability:4317
 
 ### 1. Consuming services (services → this library)
 
-All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also uses `pkg/grpccommon` (`Config`, `ObservabilityUnaryInterceptors`, `Shutdown`). All pin `v1.3.0` today and move to `v1.4.0` together. Every service uses `Config`, `ObservabilityMiddlewares`, `TimeoutMiddleware`, `InitTracingFromEnv`, `Shutdown` and `MetricsRegisterer`; beyond that (non-test code, comments excluded):
+All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also uses `pkg/grpccommon` (`Config`, `ObservabilityUnaryInterceptors`, `Shutdown`). As of 2026-10-16 ten pin `v1.6.0` and `iam-org-membership` pins `v1.5.0`; none is on `/v2` yet (see *v2.0.0 migration status* below). Every service uses `Config`, `ObservabilityMiddlewares`, `TimeoutMiddleware`, `InitTracingFromEnv`, `Shutdown` and `MetricsRegisterer`; beyond that (non-test code, comments excluded):
 
 | Service | Also uses |
 |---|---|
@@ -1006,9 +1017,25 @@ All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also u
 | `iam-authz-enrichment` | `grpccommon.ObservabilityUnaryInterceptors` (no `ProtectedMiddlewares`) |
 | `iam-event-consumer` | observability only (no `ProtectedMiddlewares`) |
 
-No service calls `LabeledRegisterer` outside tests. Every service registers `TimeoutMiddleware` **before** `ObservabilityMiddlewares` (the pre-1.4 guidance), which v1.4.0 records incorrectly ([LLD §16 OQ-18](docs/lld/platform-gincommon-lld.md#16-open-questions-and-sign-off-register)).
+No service calls `LabeledRegisterer` outside tests. Only `iam-delegation` calls `PropagateHeaders` to reach other IAM services; calls that rely on identity forwarding must use `PropagateIdentityHeaders`.
 
-Only `iam-delegation` calls `PropagateHeaders` to reach other IAM services; any of those calls that rely on identity forwarding must switch to `PropagateIdentityHeaders` in v1.4.0.
+**v2.0.0 migration status** (non-test code in the services' working trees, 2026-10-16). Each service needs the `/v2` import path and the RFC 9457 handler changes in [Upgrading to v2.0.0](#10-upgrading-to-v200):
+
+| Service | `gincommon.ErrorResponse` uses | Hand-written `c.JSON`/`c.AbortWithStatusJSON` error bodies | Timeout |
+|---|---|---|---|
+| `iam-group-mapping` | 86 | 2 | `Config.RequestTimeout` |
+| `iam-delegation` | 65 | 0 | `TimeoutMiddleware` |
+| `iam-user-profile` | 0 | 62 | `TimeoutMiddleware` |
+| `iam-org-membership` | 2 | 11 | `Config.RequestTimeout` |
+| `iam-catalog-admin` | 0 | 10 | `TimeoutMiddleware` |
+| `iam-realm-provisioner` | 0 | 10 | `Config.RequestTimeout` |
+| `iam-token-service` | 0 | 4 | `Config.RequestTimeout` |
+| `iam-audit-log` | 1 | 3 | `TimeoutMiddleware` |
+| `iam-event-consumer` | 2 | 2 | `Config.RequestTimeout` |
+| `iam-authz-enrichment` | 0 | 1 | `TimeoutMiddleware` |
+| `iam-tender-acl` | 1 | 0 | `Config.RequestTimeout` |
+
+The five services still calling `TimeoutMiddleware` directly must register it after `ObservabilityMiddlewares` (or switch to `Config.RequestTimeout`), otherwise metrics and logs record a 200 while the client gets 503 ([LLD §16 OQ-18](docs/lld/platform-gincommon-lld.md#16-open-questions-and-sign-off-register)).
 
 ### 2. Sibling libraries
 

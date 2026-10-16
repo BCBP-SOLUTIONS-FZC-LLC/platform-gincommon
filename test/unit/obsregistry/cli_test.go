@@ -227,3 +227,18 @@ platform_build_info_count
 		t.Error("want read error")
 	}
 }
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+// A report that cannot be written (closed pipe, full disk) is a tool error (exit 2),
+// never a silent success.
+func TestRun_CheckOutputWriteFailure(t *testing.T) {
+	var errOut strings.Builder
+	in := "# TYPE platform_build_info gauge\nplatform_build_info{" + ids + `,version="1"} 1` + "\n"
+	code := obsregistry.Run([]string{"check"}, strings.NewReader(in), failingWriter{}, &errOut)
+	if code != 2 || !strings.Contains(errOut.String(), "broken pipe") {
+		t.Fatalf("code %d, stderr %q; want 2 and the write error", code, errOut.String())
+	}
+}

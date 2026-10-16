@@ -5,14 +5,15 @@ graph TD
     end
 
     subgraph pkg["Public API  —  pkg/  (the only packages consumers import)"]
-        gin_pkg["gincommon<br/>Config · TracingOptions · TracingConfig<br/>Observability/Protected/DefaultMiddlewares · TimeoutMiddleware · HealthHandler<br/>RequirePermission(WithLogger) · PropagateHeaders · PropagateIdentityHeaders<br/>InitTracingWithConfig · InitTracing · EnsureTracing · InitTracingFromEnv · Shutdown<br/>NewTracer · NewSpanTracer · SpanTraceID · RecordSpanError · InjectTraceContext<br/>MetricsHandler · NewShared*Vec · New*Vec · LabeledRegisterer<br/>aliases: Authorizer · RequestContextData · Logger · DemoRBAC · ErrForbidden"]
+        gin_pkg["gincommon<br/>Config · TracingOptions · TracingConfig<br/>Observability/Protected/DefaultMiddlewares · TimeoutMiddleware · HealthHandler<br/>RequirePermission(WithLogger) · PropagateHeaders · PropagateIdentityHeaders<br/>InitTracingWithConfig · InitTracing · EnsureTracing · InitTracingFromEnv · Shutdown<br/>NewTracer · NewSpanTracer · SpanTraceID · RecordSpanError · InjectTraceContext<br/>MetricsHandler · NewShared*Vec · New*Vec · LabeledRegisterer<br/>AbortWithProblem · ClassifyError · BindingError · ShouldBind(JSON)<br/>aliases: Authorizer · RequestContextData · Logger · DemoRBAC · ErrForbidden"]
         grpc_pkg["grpccommon<br/>Config · Observability/Protected/Full/Default Unary+Stream Interceptors<br/>Timeout{Unary,Stream}Interceptor · RequirePermission · RequireStreamPermission<br/>{Unary,Stream}ClientInterceptor · {Unary,Stream}ClientIdentityInterceptor<br/>RegisterKnownMethods · RegisterHealth · RequestContextFromContext · Shutdown<br/>aliases: Authorizer · RequestContextData · Logger · DemoRBAC · ErrForbidden"]
+        problem_pkg["problem (stdlib only)<br/>Problem · FieldError · Type registry (15 platform/* + MustType)<br/>Error + New*Error · FromError · Builder<br/>ResolveTraceID · FromResponse · OpenAPIComponents"]
         obs_pkg["obsregistry<br/>Default · Parse · Validate · ValidateText · ServicePrefix<br/>Severity · Rule* re-exports"]
         log_pkg["logger<br/>NewLogger(env) · Default()"]
     end
 
     subgraph inbound["Inbound adapters  —  internal/adapter/inbound/"]
-        http_mw["http/middleware<br/>PanicRecovery · RequestID · Tracing · CorrelationHeaders<br/>Metrics (+429 log limiter) · Logging · Timeout<br/>RequireAuth · ContextMiddleware · AuthZMiddleware<br/>identity.go: ambiguous-header check · roles join"]
+        http_mw["http/middleware<br/>PanicRecovery · RequestID · Tracing · CorrelationHeaders<br/>Metrics (+429 log limiter) · Logging · Timeout<br/>RequireAuth · ContextMiddleware · AuthZMiddleware<br/>ProblemMiddleware (global error handler) · WriteProblem · BindingError<br/>identity.go: ambiguous-header check · roles join"]
         grpc_mw["grpc/middleware<br/>Unary+Stream: PanicRecovery · RequestID · Tracing · Metrics · Logging<br/>RequireAuth · Context · AuthZ · Timeout (stream: handler goroutine)<br/>client propagation + identity interceptors<br/>status.go: grpcStatus/grpcCode · CANCELLED-style names"]
         label["label<br/>HTTPRoute → Gin template or unknown<br/>GRPCMethod → pattern + 256-byte cap + allow-list"]
     end
@@ -23,8 +24,12 @@ graph TD
         log_adp["logger<br/>Zap: console in dev/local, JSON otherwise<br/>LOG_LEVEL · LOG_SAMPLING (off) · LOG_FILE tee"]
     end
 
+    subgraph errors["Error contract  —  internal/problem/  (stdlib only)"]
+        problem_int["RFC 9457 model · type registry · Builder · FromError<br/>ResolveTraceID (pgcommon-py order) · client decoder · openapi.yaml"]
+    end
+
     subgraph registry["Governance  —  internal/obsregistry/"]
-        reg["registry.json (embedded, 110 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
+        reg["registry.json (embedded, 114 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
     end
 
     subgraph core["Core  —  internal/core/  (no framework imports)"]
@@ -47,6 +52,9 @@ graph TD
     router      --> gin_pkg
     router      --> log_adp
     gin_pkg     --> http_mw
+    gin_pkg     --> problem_pkg
+    problem_pkg --> problem_int
+    http_mw     --> problem_int
     gin_pkg     --> metrics_adp
     gin_pkg     --> otel_adp
     gin_pkg     --> service
@@ -60,6 +68,7 @@ graph TD
     obs_pkg     --> reg
     log_pkg     --> log_adp
     http_mw     --> label
+    http_mw     --> problem
     http_mw     --> metrics_adp
     http_mw     --> service
     http_mw     --> port

@@ -50,7 +50,7 @@ go test ./test/unit/metrics/... -run TestMetricsInit -v
 go test ./test/integration/... -run TestMiddlewareChain -v
 ```
 
-**Coverage note:** tests live under `test/` (a separate package tree from sources). Always use `-coverpkg=./internal/...,./pkg/...` to get meaningful numbers; running `go test ./...` without it shows 0% for source packages. `make cover` and `make cover-func` handle this correctly.
+**Coverage note:** tests live under `test/` (a separate package tree from sources). Always use `-coverpkg=./internal/...,./pkg/...,./cmd/...` (the Makefile's set) to get meaningful numbers; running `go test ./...` without it shows 0% for source packages. `make cover` and `make cover-func` handle this correctly.
 
 ## Architecture
 
@@ -66,11 +66,13 @@ internal/
   adapter/
     inbound/    ← HTTP middleware, gRPC interceptors
     outbound/   ← Zap logger, Prometheus metrics, OTel tracing
+  problem/      ← RFC 9457 model, type registry, builder, FromError, trace-id, client decoder (stdlib only; pkg/problem is its facade)
+  obsregistry/  ← Platform Observability Registry (registry.json), validation, refs, CLI
   config/       ← Environment variable loading
   server/       ← Reference server wiring (demo only)
 ```
 
-**Dependency rule:** `domain` ← `port` ← `service` ← `adapter` ← `pkg`. The `core/` layers never import `adapter/` or framework packages. Interfaces in `core/port/` are implemented in `adapter/outbound/` and injected inward.
+**Dependency rule:** `domain` ← `port` ← `service` ← `adapter` ← `pkg`. The `core/` layers never import `adapter/` or framework packages. Interfaces in `core/port/` are implemented in `adapter/outbound/` and injected inward. `internal/problem`, `internal/obsregistry` and `internal/config` are leaves with no internal imports; only the HTTP middleware and `pkg/problem` import `internal/problem`.
 
 ### Public API (`pkg/`)
 
@@ -180,14 +182,29 @@ Local docker-compose stack only — **never read by the library**, defaults in `
 
 ## Test Layout
 
-- `test/unit/` — isolated unit tests per package (metrics, middleware, logger, grpc, config, service, etc.)
-- `test/integration/` — full middleware chain on an in-process HTTP server
+- `test/unit/` — isolated unit tests per package (metrics, middleware, logger, grpc, config, service, etc.). Notable:
+  - `test/unit/problem` — RFC 9457 registry invariants + `docs/problem-details/registry.md` drift, builder, `FromError`, trace-id vectors shared with pgcommon-py, client decoding, OpenAPI schema vs struct
+  - `test/unit/gincommon/errors_test.go` — the problem contract through the full stack (content type, required members, status mapping, validation, no 5xx leaks, tenant, trace)
+  - `test/unit/uninit` — metrics **before** initialization (constructors fail; `passthrough_test.go`: HTTP metrics middleware and gRPC metrics interceptors pass through). File order matters (`passthrough_test.go` sorts first) and the package is valid only with `-count=1`
+  - `test/unit/customvalidator` — own process: a service-replaced `binding.Validator` is left alone
+  - `test/unit/identity` — one-identity-per-process through the public constructors, without `test/testenv`
+- `test/integration/` — full middleware chain on an in-process HTTP server; `problem_details_test.go` (reverse-proxy passthrough, gateway-generated problem, `problem.FromResponse`)
 - `test/e2e/` — full server startup
 - `test/smoke/` — optional; requires a live server (`SMOKE_BASE_URL`)
-- `test/fixtures/` — shared test helpers (MockLogger, HTTP helpers, error response decoder)
+- `test/fixtures/` — shared test helpers (MockLogger, HTTP helpers, `DecodeProblem` / `IsProblemType` for RFC 9457 bodies)
 - `test/testenv/` — loads `.env` (if present) for tests and defaults `OBSERVABILITY_DOMAIN=iam`, `ENVIRONMENT=test`
 
+## Current Status (2026-10-16)
+
+- **v2.0.0** (RFC 9457 error contract, `/v2` module path, go1.26.9 / x/net v0.60.0 security fix) is merged to `main`; the release PR (#41, CHANGELOG `[2.0.0]`) precedes the `v2.0.0` tag. v1.4.x–v1.6.x is the previous major (security fixes only).
+- **Consumers:** the 11 IAM services pin `v1.6.0` (ten) and `v1.5.0` (`iam-org-membership`); none is on `/v2`. Their v2 migration effort (`ErrorResponse` uses, hand-written error bodies, `TimeoutMiddleware` placement) is tabulated in README → *Platform dependencies*.
+- **Cross-language parity:** platform-fastapicommon `main` implements the same RFC 9457 contract; platform-interop-tests' `error_shape` check requires the Go and Python 401 to be the same problem.
+- **Open decision (LLD OQ-24):** whether the error handler should log the (sanitized) cause of an unclassified 500.
+
 ## Key Design Decisions
+
+**RFC 9457 error contract (v2.0.0)** — `middleware.WriteProblem` is the only HTTP error writer; `ProblemMiddleware` (innermost `ObservabilityMiddlewares` handler) renders the last `c.Error` and bodiless error statuses (incl. Gin's 404/405) and never touches a written response. A 5xx `internal-error` never has a `detail` (`Builder.Build` strips it). `traceId` uses platform-pgcommon-py's order (traceparent → sanitized x-request-id → span → generated). `tenantId` only from the verified `RequestContext`. One WARN `problem response` log line with pgcommon-py's field names; the cause is not logged (OQ-24). Status codes are v1's (timeout stays 503 `REQUEST_TIMEOUT`). `c.AbortWithStatus*`/`c.AbortWithError`/`c.BindJSON` commit headers and cannot be converted — use `c.Error`, `AbortWithProblem`, `ShouldBind*`. Contract: `docs/problem-details/`.
+
 
 **Nil-safe logger and metrics** — every middleware that accepts a `port.Logger` checks for `nil` before calling it. `LoggingMiddleware(nil)` is a complete no-op (passes through without logging). `PanicRecoveryMiddleware(nil)` falls back to `log.Printf` on stderr. All gRPC logging and panic-recovery interceptors also check for nil logger. Prometheus collectors are only recorded once metrics are initialized (`metrics.InitWithOptions` / `MustInitFromConfig`) — including the inner panic-recovery defer in `MetricsMiddleware`. Consumers that skip metrics or logging are unaffected — nothing panics. `Fatal` is excluded from `port.Logger` because it calls `os.Exit(1)` and belongs in `main()`, not middleware.
 
@@ -256,7 +273,7 @@ GitHub Actions, modelled on the IAM service pipelines (iam-org-membership). This
 **`ci.yml`** (push/PR to main; skips Markdown/mermaid-only commits):
 - `validate-test` ∥ `validate-quality` ∥ `build-image` (Hadolint, ignoring DL3018 because the bases are digest-pinned; `.dockerignore` check; amd64 build into GHA + registry cache)
 - `trivy` (CRITICAL/HIGH/UNKNOWN fails; SARIF upload; CycloneDX SBOM) and `smoke` (`smoke-tests.sh`: image ≤ 60 MB; an invalid `OBSERVABILITY_DOMAIN` must exit non-zero with the registry error; `/health` ok and `/metrics` exposes `platform_build_info` / `platform_http_requests_total` with identity labels), both after validate-test + build-image
-- `interop` (platform-interop-tests) after validate-test
+- `interop` (platform-interop-tests) after validate-test. The reusable workflow is SHA-pinned but always runs the harness from interop `main`; a cross-repo contract change (like RFC 9457) needs the harness change merged first, and a temporary `platform_<lib>_ref` input while the sibling's PR is open
 - `pr-summary` (PRs: one updated status comment) and `push` (main: demo image → GHCR with branch + `sha-` tags, provenance + SBOM, Cosign keyless sign + verify). The image is the **reference/demo image**, not a production artefact.
 
 **`release.yml`** (`v*` tags or manual) — mirrors platform-pgcommon/platform-events: `verify` (verify-release-tag.sh: dispatch ref must be `main` or the tag, HEAD == tag, tag reachable from `origin/main`; verify-changelog-entry.sh via changelog-section.sh — an rc may use its base version's section; `SOURCE_DATE_EPOCH`; release-image-tags.sh picks forward-only `X.Y`/`X`) → the same gates as `ci.yml` at the tag (validate-test ∥ validate-quality ∥ build-image → trivy, smoke, interop) + `binaries` (metricslint ×5 with `.sha256`) → `push` (image-fingerprint.sh: the pre-push local build and the pulled-back pushed digest must match the fingerprints trivy and smoke recorded; Cosign sign + verify; BuildKit SLSA provenance via export-image-provenance.sh) → `publish` (release-checksums.sh re-verifies and writes `checksums.txt`, Cosign `sign-blob` → `checksums.txt.sigstore.json`, create-github-release.sh). The demo image never gets `latest`. Signer identity `release.yml@refs/tags/vX.Y.Z` (or `@refs/heads/main` for a dispatch from main). This is the **Go module release** consuming services pin to with `go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@vX.Y.Z`. There is no deploy gate (nothing is deployed).
@@ -266,6 +283,7 @@ GitHub Actions, modelled on the IAM service pipelines (iam-org-membership). This
 ## Extending the Library
 
 - **New middleware:** implement in `internal/adapter/inbound/http/middleware/`, expose via `pkg/gincommon/gincommon.go`. Thread `port.Logger` through the constructor (nil-safe) following the `MetricsMiddleware` pattern.
+- **New error type:** a cross-cutting one is a `platform/*` entry in `internal/problem/types.go` + a row in `docs/problem-details/registry.md` (drift-tested) + the same entry in platform-fastapicommon; a service-specific one is `problem.MustType("<domain>", ...)` in the service. Never write an error body by hand — return a `*problem.Error` (or `c.Error(err)`).
 - **New metrics:** a new `platform_*` or `<domain>_*` metric is a registry change first: add the entry (and any new label) to `internal/obsregistry/registry.json` with `"status": "proposed"` (governance approval flips it to `approved`), run `make metrics-inventory`, then build the collector from the registry in `initCollectors` (`internal/adapter/outbound/metrics/metrics.go`). Never add new un-namespaced legacy collectors. `make metrics-lint` and `test/unit/platformmetrics` must pass.
 - **Replace logger:** implement `Logger` in `internal/core/port/logger.go`, place implementation in `internal/adapter/outbound/`, inject via `Config`.
 - **Replace RBAC:** implement `Authorizer` in `internal/core/port/authorizer.go`, place implementation in `internal/adapter/outbound/`, inject via `RequirePermissionWithLogger`.
