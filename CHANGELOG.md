@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> **Versioning:** these changes ship as **v2.0.0**, a proper MAJOR with the `/v2` module path (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2`), not as a recorded exception. Follow *Upgrading to v2.0.0* in `README.md` and the migration table in `docs/problem-details/README.md`.
+## [2.0.0] - 2026-10-16
+
+> **Versioning:** this release is **v2.0.0**, a proper MAJOR with the `/v2` module path (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2`), not a recorded exception. Follow *Upgrading to v2.0.0* in `README.md` and the migration table in `docs/problem-details/README.md`.
 
 ### Security
 
