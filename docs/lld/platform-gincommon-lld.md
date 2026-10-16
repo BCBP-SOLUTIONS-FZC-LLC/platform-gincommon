@@ -1159,6 +1159,7 @@ HTTP: the full chain over `httptest` (`TestMiddlewareFlow*`). gRPC: a real bufco
 | OQ-22 | **A later `InitTracing` without a logger resets the OTel error handler to stderr** after `ObservabilityMiddlewares` set `Config.Logger` | Library maintainers | Deferred |
 | OQ-23 | **C1 control characters (U+0080–U+009F) are accepted** in identity headers | Library maintainers | Deferred |
 | OQ-24 | **Cause logging for unclassified 500s.** A handler's `c.Error(err)` that maps to `internal-error` lost its root cause | Platform team | **Resolved** 2026-10-16 — confidentiality first: the error text is never logged; an `unclassified error` entry (error level) records route, operation, request/trace ids and the error-chain types, and an unclassified 500 is treated as a defect to alert on (§7.3) |
+| OQ-25 | **`platform_unclassified_errors_total` metric.** Unclassified errors currently emit a structured log entry only (`unclassified error`, OQ-24). A dedicated `platform_*` counter would make alerting and trend analysis easier, but a new platform metric needs agreement on ownership, naming, labels and alerting semantics (registry entry, `proposed` → `approved`). Until then, detection relies on the emitted log event | Observability governance | Open |
 | OQ-17 | **gRPC roles parity.** Repeated `x-tenant-roles` are joined (not rejected); gateways must strip client-supplied roles | Gateway owners | Accepted (documented, SEC-1) |
 
 ---
