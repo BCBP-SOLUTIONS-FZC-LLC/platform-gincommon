@@ -43,7 +43,7 @@ sequenceDiagram
     else identity valid
         AU ->>+ CM: c.Next()
         alt x-tenant-roles over 4096 bytes or 64 roles
-            CM -->> AU: 401 invalid tenant roles (identity logged as claimed_*)
+            CM -->> AU: 401 unauthorized problem (identity logged as claimed_*)
         else ok
             Note over CM: RequestContext{UserID, TenantID, Roles, TraceID, ClientIP}
             CM ->>+ H: c.Next()
@@ -54,7 +54,7 @@ sequenceDiagram
     AU -->>- TO: return
     alt deadline exceeded and nothing written / status still 200
         Note over TO: platform_http_request_timeouts_total +1
-        TO -->> LO: 503 request timeout
+        TO -->> LO: 503 problem (service-unavailable, REQUEST_TIMEOUT)
     end
     TO -->>- LO: return
 

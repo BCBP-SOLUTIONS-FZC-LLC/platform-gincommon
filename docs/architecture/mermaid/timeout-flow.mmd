@@ -6,7 +6,7 @@ flowchart TD
         H4 -- no --> H9(["return — handler's response stands"])
         H4 -- yes --> H5{"response written, or status changed from 200?<br/>(e.g. c.Status(204) after the deadline)"}
         H5 -- yes --> H9
-        H5 -- no --> H6["platform_http_request_timeouts_total +1<br/>503 request timeout JSON"]
+        H5 -- no --> H6["platform_http_request_timeouts_total +1<br/>503 service-unavailable problem"]
         H6 --> H7(["Metrics / Logging / Tracing are OUTSIDE it:<br/>they record the same 503 the client receives"])
     end
 
