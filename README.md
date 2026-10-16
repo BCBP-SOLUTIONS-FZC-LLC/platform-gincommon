@@ -17,7 +17,7 @@ The platform's shared **Gin HTTP and gRPC middleware library**: the transport-la
 | `RequestContext{TenantID, UserID, Roles, TraceID, ClientIP}` in Gin and Go contexts | Business authorization policy — production services implement `Authorizer`; `NewDemoRBAC()` is reference-only |
 | The standard error envelope `{error, status, trace_id, request_id}` and `X-Trace-ID`/`X-Request-ID` response headers | Request-body binding, business validation, domain error mapping |
 | `platform_http_*`, `platform_grpc_*`, `platform_build_info` collectors with `{domain, service, environment}` injected centrally | Service-specific (Tier 3) metric *definitions* — services declare them, gincommon only validates them |
-| The central Platform Observability Registry (114 entries across six platform libraries) and its enforcement (`pkg/obsregistry`, `cmd/metricslint`) | Messaging metrics *emission* (platform-events) and DB-pool/query metrics (platform-pgcommon) — they emit, the registry governs |
+| The central Platform Observability Registry (115 entries across six platform libraries) and its enforcement (`pkg/obsregistry`, `cmd/metricslint`) | Messaging metrics *emission* (platform-events) and DB-pool/query metrics (platform-pgcommon) — they emit, the registry governs |
 | OpenTelemetry setup: one delegating global `TracerProvider`, `ParentBased` sampling, OTLP/gRPC export, W3C propagation | The collector/Tempo/Prometheus/Loki infrastructure (local stack in `docker-compose.yml` is dev-only) |
 | Outbound propagation: `PropagateHeaders` (trace + request ID, any destination) and opt-in `PropagateIdentityHeaders` / gRPC client interceptors | Retries, circuit breaking, rate limiting (gateway / mesh) |
 | Structured Zap logging with sanitization and redaction | Database access, pooling, RLS (platform-pgcommon); outbox/SNS/SQS (platform-events) |
@@ -45,7 +45,7 @@ This is enforced structurally: the `core/` layers never import `adapter/` or fra
 
 Five public packages and one CLI. Source of truth: `go doc ./pkg/<name>`; the tables below are the stable surface covered by SemVer ([VERSIONING.md](VERSIONING.md)). `internal/*`, `cmd/server` and `test/*` are not.
 
-**Default HTTP chain:** `gincommon.DefaultMiddlewares` = `ObservabilityMiddlewares` (`PanicRecovery → RequestID → Tracing → CorrelationHeaders → Metrics → Logging → [Timeout when Config.RequestTimeout > 0] → error handler`) + `ProtectedMiddlewares` (`RequireAuth → ContextMiddleware`). **Default gRPC chain:** `grpccommon.FullUnaryInterceptors` = `recovery → request ID → tracing → metrics → logging → auth → context` (logging wraps auth, so rejected calls are logged).
+**Default HTTP chain:** `gincommon.DefaultMiddlewares` = `ObservabilityMiddlewares` (`PanicRecovery → RequestID → Tracing → CorrelationHeaders → Metrics → Logging → [Timeout when Config.RequestTimeout > 0] → error handler`) + `ProtectedMiddlewares` (`RequireAuth → ContextMiddleware`). **Default gRPC chain:** `grpccommon.FullUnaryInterceptors` = `recovery → request ID → tracing → metrics → logging → error sanitizer → auth → context` (logging wraps auth, so rejected calls are logged; the sanitizer turns a plain handler error into `Internal "internal server error"` instead of grpc-go sending `Unknown` with the error text).
 
 ### `pkg/gincommon` — HTTP services
 
@@ -213,7 +213,7 @@ The core never imports Gin, gRPC, Prometheus or OpenTelemetry; interfaces in `co
 | **Metrics** | Prometheus `client_golang v1.24.1` | Registered on `prometheus.DefaultRegisterer` unless an isolated registry is passed; `/metrics` uses `ContinueOnError` |
 | **Tracing** | OpenTelemetry `v1.46.0`, OTLP/gRPC exporter | One delegating global provider (its inner SDK provider is swapped atomically); in-process fallback when the exporter cannot be created |
 | **Logging** | Zap `v1.28.0` | JSON in production, console in dev/local; sampling off unless `LOG_SAMPLING=true` |
-| **Registry** | Embedded `registry.json` | 114 entries: 5 `approved`, 52 `proposed`, 57 `removed` (legacy names kept so `metricslint` can name their replacement) |
+| **Registry** | Embedded `registry.json` | 115 entries: 6 `approved`, 52 `proposed`, 57 `removed` (legacy names kept so `metricslint` can name their replacement) |
 
 ### Sibling platform libraries
 
@@ -816,7 +816,7 @@ curl -s localhost:8080/panic >/dev/null
 
 ### Coverage
 
-`make cover-check` (CI: `coverage-gate.sh`, `COVERAGE_THRESHOLD`) fails below **98%** statement coverage measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` — tests live in `test/`, so plain `go test ./...` shows 0% for source packages. The current total is **99.6%**. Use `test/fixtures.MockLogger` to assert structured log output, and `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())` (or the `test/fixtures` helpers) for isolated registries.
+`make cover-check` (CI: `coverage-gate.sh`, `COVERAGE_THRESHOLD`) fails below **98%** statement coverage measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...` — tests live in `test/`, so plain `go test ./...` shows 0% for source packages. The current total is **99.5%**. Use `test/fixtures.MockLogger` to assert structured log output, and `metrics.InitWithRegistererOptions(opts, prometheus.NewRegistry())` (or the `test/fixtures` helpers) for isolated registries.
 
 ---
 
@@ -872,7 +872,7 @@ Boolean `OTEL_*` values are case-insensitive (`true`/`1`/`yes`, `false`/`0`/`no`
 
 Per the [Enterprise Platform Observability Standard](docs/observability/README.md)'s three-tier hierarchy, with `domain`/`service`/`environment` injected centrally as const labels — never declared at a call site, and `version` only on `platform_build_info`:
 
-- **Tier 1 — `platform_*`** (emitted by this library): `platform_http_requests_total`, `platform_http_request_duration_seconds`, `platform_http_request_size_bytes`, `platform_http_response_size_bytes`, `platform_http_active_requests`, `platform_http_panics_total`, `platform_http_rate_limited_requests_total`, `platform_http_request_timeouts_total`; `platform_grpc_server_handled_total`, `platform_grpc_server_handling_seconds`, `platform_grpc_server_request_size_bytes`, `platform_grpc_server_response_size_bytes`, `platform_grpc_server_inflight_requests`, `platform_grpc_panics_total`, `platform_grpc_rate_limited_requests_total`; `platform_build_info`. Messaging (`platform_messages_*`, `platform_dlq_*`) and DB metrics come from platform-events / platform-pgcommon under the same registry.
+- **Tier 1 — `platform_*`** (emitted by this library): `platform_http_requests_total`, `platform_http_request_duration_seconds`, `platform_http_request_size_bytes`, `platform_http_response_size_bytes`, `platform_http_active_requests`, `platform_http_panics_total`, `platform_http_rate_limited_requests_total`, `platform_http_request_timeouts_total`; `platform_grpc_server_handled_total`, `platform_grpc_server_handling_seconds`, `platform_grpc_server_request_size_bytes`, `platform_grpc_server_response_size_bytes`, `platform_grpc_server_inflight_requests`, `platform_grpc_panics_total`, `platform_grpc_rate_limited_requests_total`; `platform_unclassified_errors_total{transport}` (both transports); `platform_build_info`. Messaging (`platform_messages_*`, `platform_dlq_*`) and DB metrics come from platform-events / platform-pgcommon under the same registry.
 - **Tier 2 — `<domain>_*`** (shared within a domain — today `iam_auth_events_total`, `iam_tenant_resolution_total`, `iam_identity_sync_total`, `iam_realm_operations_total`, `iam_rls_violations_total`, `iam_auth_session_revoke_failed_total`, `iam_lifecycle_event_skipped_total`, `iam_lifecycle_event_lag_seconds`, all `proposed`): registry entries, built with `NewShared*`.
 - **Tier 3 — `<domain>_<service>_*`** (one service only): free to add, validated at construction and by `metricslint`.
 

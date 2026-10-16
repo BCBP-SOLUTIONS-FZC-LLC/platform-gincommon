@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`platform_unclassified_errors_total{transport}`** (registry `approved`, LLD OQ-25): counts every unclassified error. That is an HTTP `problem.Error.Unclassified()` 500 or a non-status gRPC handler error sent as `Internal`, with `transport` = `http` | `grpc`. It is recorded with or without a logger, and both series are initialised to 0, so `increase()` sees the first error. New reference alert `PlatformUnclassifiedErrors` (ticket), with a promtool test and a runbook. The `unclassified error` log event is retained for diagnostics; the metric deliberately has no route or method label. New registry label `transport`.
+- **gRPC handler errors no longer leak to clients.** A new error sanitizer is the innermost interceptor of `ObservabilityUnaryInterceptors` / `ObservabilityStreamInterceptors` (and so of `Full*` / `Default*`). Before it, grpc-go sent a plain handler error as `Unknown` with `err.Error()` as the message, and a status wrapped with `fmt.Errorf("…: %w", st)` carried the wrapper's text. Now:
+  - a status error is kept; a wrapped one is sent as its inner status (code, message, details) without the wrapper's text;
+  - `context.DeadlineExceeded` / `context.Canceled` (wrapped or not) become `DeadlineExceeded "deadline exceeded"` / `Canceled "canceled"`;
+  - anything else, including a non-nil error claiming `OK`, becomes `Internal "internal server error"` and is logged at error level as `unclassified error` (`classified=false`, `trace_id`, `request_id`, `service`, `grpc_method`, `grpc_code`, `error_type`, `error_chain`), never `err.Error()`.
+  - Metrics, the `grpc_request` log and spans record the sanitized status (they run outside it). Callers that matched on `Unknown` or on error text must use status codes.
 - **Toolchain `go1.26.6` → `go1.26.9` and `golang.org/x/net` v0.59.0 → v0.60.0**, fixing the standard-library and x/net vulnerabilities `govulncheck` reports as reachable from library code:
   - GO-2026-6617 (HTTP/2 HPACK encoder race)
   - GO-2026-6613 and GO-2026-6605 (HTTP/1 CONNECT desynchronization)
@@ -52,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Gin's default validator reports `json` / `form` tag names once the error handler is built.
 - **`Config.ProblemTypeBase`**: the type URI base (default `https://errors.company.com`).
 - **Problem logging**: each problem is logged once at WARN as `problem response`, with `traceId`, `type`, `status`, `errorCode`, `service`, `tenantId`. These are the names and the level platform-pgcommon-py uses. The entry never contains the detail, the instance, headers or the identity.
+- **Unclassified errors are logged as a defect, without their text.** A handler error the error handler cannot classify (a 500 from `problem.FromError`'s fallback; `problem.Error.Unclassified()`) also emits an error-level `unclassified error` entry: `classified=false`, `traceId`/`trace_id`/`request_id`, `service`, `method`, `route`, `operation` (the Gin handler), `status`, `errorCode`, and `error_type` / `error_chain` (the Go types along the `Unwrap` chain, at most 8). It never contains `err.Error()`, which may hold SQL, PII, tokens or secrets. Alert on it. Deliberate `problem.NewInternalError` and panics (already logged with their stack) are not unclassified.
 - `tenantId` is set only from the verified `RequestContext` (never on a 401), and `instance` never includes the query string.
 - **Docs**: `docs/problem-details/` (the contract, exception mapping, validation, trace correlation, logging, security, gateway/Envoy/BFF rules, OpenAPI, clients, migration) and the error type registry.
 - **CI smoke gate**: the demo image must answer an unknown route with a `platform/not-found` problem.

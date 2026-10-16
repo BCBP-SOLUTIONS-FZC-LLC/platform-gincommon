@@ -46,7 +46,7 @@ graph TD
     end
 
     subgraph registry["Governance  —  internal/obsregistry/"]
-        reg["registry.json (embedded, 114 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
+        reg["registry.json (embedded, 115 entries)<br/>Validate · refs scanner · OpenMetrics normaliser · inventory · CLI"]
     end
 
     subgraph core["Core  —  internal/core/  (no framework imports)"]
@@ -91,6 +91,7 @@ graph TD
     http_mw     --> port
     http_mw     --> domain
     grpc_mw     --> label
+    grpc_mw     --> problem_int
     grpc_mw     --> metrics_adp
     grpc_mw     --> service
     grpc_mw     --> port
@@ -103,7 +104,7 @@ graph TD
     port        --> domain
 ```
 
-**Rule:** `domain` ← `port` ← `service` ← `adapter` ← `pkg`. The `core/` packages import nothing from `adapter/`, `pkg/`, Gin, gRPC, Prometheus or OpenTelemetry. `core/service` imports only `core/domain`, and `RBACService` satisfies `port.Authorizer` structurally. Interfaces in `core/port` are implemented in adapters and injected inward. `internal/obsregistry`, `internal/problem` and `internal/config` are standalone leaves with no internal imports. `internal/problem` (RFC 9457, standard library only) is used by the HTTP middleware and re-exported by `pkg/problem`; `internal/obsregistry` and `internal/config` are used by the outbound adapters and `pkg/`. `pkg/gincommon` and `pkg/grpccommon` are composition layers; neither imports the other. They share process state only through `adapter/outbound/metrics` and `adapter/outbound/otel`, which is why there is **one metrics identity and one tracer provider per process**. `pkg/gincommon` imports `pkg/logger` (for `MetricsHandler`'s rate-limited error log).
+**Rule:** `domain` ← `port` ← `service` ← `adapter` ← `pkg`. The `core/` packages import nothing from `adapter/`, `pkg/`, Gin, gRPC, Prometheus or OpenTelemetry. `core/service` imports only `core/domain`, and `RBACService` satisfies `port.Authorizer` structurally. Interfaces in `core/port` are implemented in adapters and injected inward. `internal/obsregistry`, `internal/problem` and `internal/config` are standalone leaves with no internal imports. `internal/problem` (RFC 9457, standard library only) is used by the HTTP and gRPC middleware (the gRPC side only for `ErrorChainTypes`) and re-exported by `pkg/problem`; `internal/obsregistry` and `internal/config` are used by the outbound adapters and `pkg/`. `pkg/gincommon` and `pkg/grpccommon` are composition layers; neither imports the other. They share process state only through `adapter/outbound/metrics` and `adapter/outbound/otel`, which is why there is **one metrics identity and one tracer provider per process**. `pkg/gincommon` imports `pkg/logger` (for `MetricsHandler`'s rate-limited error log).
 
 **Type exposure rule.** Every internal type that appears in a `pkg/` signature has a `pkg/` alias (`types.go`): `Authorizer`, `RequestContextData`, `Logger`, `DemoRBAC`, `ErrForbidden`. A consumer must never need an `internal/` import, which Go would reject. `test/unit/gincommon/consumer_api_test.go` pins this rule for both stacks. The alias is `RequestContextData` in both packages because `gincommon.RequestContext` was already the accessor function.
 
@@ -183,6 +184,7 @@ graph LR
     http_mw     --> port
     http_mw     --> domain
     grpc_mw     --> label
+    grpc_mw     --> problem
     grpc_mw     --> metrics
     grpc_mw     --> service
     grpc_mw     --> port
@@ -223,7 +225,7 @@ flowchart TD
 
     B -- "DefaultMiddlewares(cfg)" --> J["ObservabilityMiddlewares(cfg)<br/>+ ProtectedMiddlewares(cfg)"]
 
-    B -- "FullUnary/StreamInterceptors(cfg)" --> K["Observability*(cfg) + Protected*(cfg)<br/>recovery → request ID → tracing → metrics → logging<br/>→ auth → context"]
+    B -- "FullUnary/StreamInterceptors(cfg)" --> K["Observability*(cfg) + Protected*(cfg)<br/>recovery → request ID → tracing → metrics → logging<br/>→ error sanitizer → auth → context"]
     K --> L(["append Timeout*Interceptor(d) last — innermost<br/>RequirePermission* after Protected*"])
 ```
 
@@ -575,14 +577,14 @@ Every HTTP error the stack writes, and every error a handler reports through it,
 
 | Concern | Where | Rule |
 |---|---|---|
-| Single writer | `middleware.WriteProblem` | The only HTTP error writer: builds the problem (`problem.BuilderFor`), sets `X-Trace-ID` / `X-Request-ID`, aborts, writes, then logs one WARN `problem response` `{traceId, type, status, errorCode, service, tenantId}`. A panicking logger is ignored |
+| Single writer | `middleware.WriteProblem` | The only HTTP error writer: builds the problem (`problem.BuilderFor`), sets `X-Trace-ID` / `X-Request-ID`, aborts, writes, then logs one WARN `problem response` `{traceId, type, status, errorCode, service, tenantId}`, plus, for an unclassified 500, an ERROR `unclassified error` with route, operation and error-chain types (never the error text). A panicking logger is ignored |
 | Global error handler | `middleware.ProblemMiddleware`, innermost `ObservabilityMiddlewares` handler | Stores the per-app settings (type base, logger, service), then after the handlers renders the last `c.Error` (`ClassifyError`) or a bodiless error status (`c.Status(404)`, Gin's 404 `ROUTE_NOT_FOUND` / 405). A written response is never touched; `context.Canceled` → 499 with no body. Innermost, so metrics, the access log and the span record the problem's status |
 | Classification | `ClassifyError` → `problem.FromError` | `*problem.Error` as is; `validator.ValidationErrors` → 400 `validation-failed`; `ErrForbidden` → 403; `errors.ErrUnsupported` → 501; `context.DeadlineExceeded` → 503 `REQUEST_TIMEOUT`; `*http.MaxBytesError` → 413; anything else → 500 without detail |
 | Validation | `BindingError`, `ShouldBind(JSON)` | JSON field paths (Gin's default validator gets a json/form tag-name function once; a replaced `binding.Validator` is left alone) and fixed messages that never echo the value |
 | Correlation | `problem.ResolveTraceID` | `traceparent` trace-id → sanitized client `x-request-id` → server span → generated (platform-pgcommon-py's order and vectors) |
 | Tenant | `WriteProblem` | `tenantId` only from the verified `RequestContext`; never on a 401 |
 
-Library-emitted problems keep their v1 status codes: 401 (`RequireAuth` / `ContextMiddleware`), 400 `INVALID_REQUEST_CONTEXT`, 403 / 500 (`RequirePermission`), 500 (panic), 503 `REQUEST_TIMEOUT` (timeout). gRPC is unaffected: RFC 9457 is HTTP-only, and `pkg/grpccommon` keeps gRPC status codes.
+Library-emitted problems keep their v1 status codes: 401 (`RequireAuth` / `ContextMiddleware`), 400 `INVALID_REQUEST_CONTEXT`, 403 / 500 (`RequirePermission`), 500 (panic), 503 `REQUEST_TIMEOUT` (timeout). RFC 9457 is HTTP-only: `pkg/grpccommon` keeps gRPC status codes, under the same confidentiality rule. Its error sanitizer (`Unary/StreamErrorSanitizerInterceptor`, the innermost `Observability*` interceptor) keeps status errors (only the inner status of a wrapped one, never the wrappers' text), gives context errors a fixed message, and turns any other handler error into `Internal "internal server error"` with the same `unclassified error` log entry (`grpc_method`, ids, error-chain types, never `err.Error()`). Without it grpc-go sends a plain error as `Unknown` with its full text.
 
 ---
 
@@ -756,7 +758,7 @@ graph LR
         own["gincommon entries<br/>platform_http_* · platform_grpc_* · platform_build_info<br/>status proposed, pending governance"]
     end
 
-    subgraph registry["internal/obsregistry/registry.json — embedded, 114 entries"]
+    subgraph registry["internal/obsregistry/registry.json — embedded, 115 entries"]
         entries["metrics: 5 approved · 48 proposed · 57 removed (legacy, with replacements)<br/>labels: vocabulary, patterns, max_values, cardinality<br/>prohibited labels (tenant_id, user_id, ...)<br/>bucket presets · owners · governance_notes"]
         parse["Parse: strict — unknown fields, duplicates,<br/>undefined labels/buckets, legacy without replacement"]
     end
@@ -1038,7 +1040,7 @@ SemVer over `pkg/*` ([VERSIONING.md](VERSIONING.md)). `v2.0.0` (RFC 9457 error c
 - **E2E** (`test/e2e/`). Full demo-server startup.
 - **Smoke** (`test/smoke/`, plus CI's `smoke-tests.sh` image gate). The image is at most 60 MB; an invalid `OBSERVABILITY_DOMAIN` must exit non-zero with the registry error; `/health` and `/metrics` must be served with identity labels.
 
-Tests live in `test/`, a separate package tree, so coverage is measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...`. The CI gate is **≥ 98%** (`coverage-gate.sh`), and the current total is **99.6%**. The gRPC (`test/unit/grpc`, `TestGRPC_*`) and tracing (`test/unit/otel`, `test/unit/gincommon`) suites pass repeated runs under `-race -count=20`.
+Tests live in `test/`, a separate package tree, so coverage is measured with `-coverpkg=./internal/...,./pkg/...,./cmd/...`. The CI gate is **≥ 98%** (`coverage-gate.sh`), and the current total is **99.5%**. The gRPC (`test/unit/grpc`, `TestGRPC_*`) and tracing (`test/unit/otel`, `test/unit/gincommon`) suites pass repeated runs under `-race -count=20`.
 
 ---
 
@@ -1136,7 +1138,7 @@ STRIDE analysis of `platform-gincommon` as embedded in a consuming service. Ever
 
 ## Session-specific decisions
 
-Judgment calls made during the v1.4.0 hardening passes (1–11) and the v2.0.0 error-contract release (12–18), each documented at its point of impact in the code as well:
+Judgment calls made during the v1.4.0 hardening passes (1–11) and the v2.0.0 error-contract release (12–19), each documented at its point of impact in the code as well:
 
 1. **Breaking changes as a MINOR.** Removing the pre-standard metric names, requiring `Domain`, and changing `Authorizer`, `PropagateHeaders` and the gRPC chain order would normally need `v2.0.0` with a `/v2` module path. No consumer had been deployed and all eleven IAM services upgrade in lockstep, so `v1.4.0` ships them as a [recorded exception](VERSIONING.md#recorded-exceptions) rather than churning every import path.
 2. **A delegating global tracer provider instead of replacing the global.** Replacing a provisional provider used to shut it down, while tracers captured earlier (pgcommon's `Config.Tracer`, package-level `otel.Tracer`) kept pointing at it and silently dropped spans. Swapping an inner pointer behind one long-lived provider fixes every capture point at once. `Shutdown` keeps that provider installed for the same reason.
@@ -1153,9 +1155,10 @@ Judgment calls made during the v1.4.0 hardening passes (1–11) and the v2.0.0 e
 13. **The Go "platform-problem-details" library lives here.** `pkg/problem` (standard library only, `internal/problem` behind it) is the model, registry, builder, error types and client decoder, instead of a separate repository. Gin services, Go gateways/BFFs and clients import one module; platform-fastapicommon and platform-pgcommon-py mirror it.
 14. **platform-pgcommon-py's `traceId` order.** `traceparent` → sanitized client `x-request-id` → span → generated, with the same test vectors, so a Go and a Python service answer the same request with the same `traceId`. When a client sends only `x-request-id`, `traceId` is that id and differs from `X-Trace-ID`; the problem log line always carries the resolved value.
 15. **No detail on `internal-error`, enforced in the builder.** Unclassified errors, panics, authorizer errors and context misconfiguration all become a detail-less 500, and `Builder.Build` strips a detail even if one was set, so no code path can leak an exception message. v1 exposed `request context missing` in 500 bodies.
-16. **One WARN `problem response` line, no cause.** The same fields and level as pgcommon-py, never the detail, instance or identity. The cause of an unclassified 500 is not logged by the error handler, because its text may carry SQL or PII; services log it where they have the context (open decision, LLD OQ-24).
+16. **One WARN `problem response` line; types, not text, for unclassified 500s.** The problem line has the same fields and level as pgcommon-py, never the detail, instance or identity. An unclassified 500 (a `FromError` fallback) also emits an error-level `unclassified error` entry with route, operation (the Gin handler), request/trace ids and the Go types along the error chain, but never `err.Error()`: confidentiality of logs wins over debugging convenience, because the global handler cannot know whether the text holds SQL, PII or secrets. An unclassified 500 is a defect: it also increments `platform_unclassified_errors_total{transport}` (approved, LLD OQ-25), which drives the `PlatformUnclassifiedErrors` alert, while the log entry stays for diagnostics. The fix is to classify the failure where it happens (LLD OQ-24).
 17. **Status codes unchanged.** Library-emitted errors keep their v1 statuses, including the 503 timeout (`service-unavailable` / `REQUEST_TIMEOUT`, not 504). Only the body and the content type changed. fastapicommon moved its timeout from 504 to 503 to match.
 18. **The error handler renders bodiless statuses and Gin's 404/405.** Running innermost in `ObservabilityMiddlewares` gives every engine problem bodies for unregistered routes without `NoRoute` wiring, while never touching a response the handler wrote. `c.AbortWithStatus*` / `c.AbortWithError` / `c.BindJSON` commit headers immediately and cannot be converted; the migration guide replaces them.
+19. **gRPC errors under the same rule.** A plain handler error used to reach gRPC clients as `Unknown` with `err.Error()`, and a status wrapped with `fmt.Errorf("…: %w", st)` carried the wrapper's text. The innermost error sanitizer sends only status errors as-is (unwrapping to the inner status), and everything else as `Internal "internal server error"`, logged as `unclassified error` with types only. Callers that matched on `Unknown` or on message text must switch to status codes.
 
 ---
 

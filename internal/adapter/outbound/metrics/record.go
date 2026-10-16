@@ -112,6 +112,21 @@ func GRPCInflightDec(method string) {
 	}
 }
 
+// Transport label values of platform_unclassified_errors_total.
+const (
+	TransportHTTP = "http"
+	TransportGRPC = "grpc"
+)
+
+// RecordUnclassifiedError increments platform_unclassified_errors_total for
+// transport (TransportHTTP or TransportGRPC): an error that reached the top-level
+// handler unclassified. A no-op before metrics are initialized.
+func RecordUnclassifiedError(transport string) {
+	if cs := active.Load(); cs != nil {
+		cs.unclassifiedErrors.WithLabelValues(transport).Inc()
+	}
+}
+
 // RecordGRPCPanic increments platform_grpc_panics_total for method.
 func RecordGRPCPanic(method string) {
 	if cs := active.Load(); cs != nil {
