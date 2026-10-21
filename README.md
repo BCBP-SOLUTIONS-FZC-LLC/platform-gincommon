@@ -3,7 +3,7 @@
 The platform's shared **Gin HTTP and gRPC middleware library**: the transport-layer system of record for how every Go service in the platform recovers panics, correlates requests, traces, logs, emits metrics, trusts gateway identity, builds tenant context and authorizes calls. It also owns the **Enterprise Platform Observability Standard** implementation for Go — the central metric registry (`internal/obsregistry/registry.json`), the `platform_*` collectors built from it, and the `metricslint` tool every service runs in CI. Every IAM service imports it on every request path.
 
 **Repository:** `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon`
-**Module:** `go 1.26.0` directive · `toolchain go1.26.9` · private module · **never deployed** — consumers import `pkg/`; `cmd/server` is a reference/demo binary and the CI image is a demo image, not a production artefact
+**Module:** `go 1.26.0` directive · `toolchain go1.26.10` · private module · **never deployed** — consumers import `pkg/`; `cmd/server` is a reference/demo binary and the CI image is a demo image, not a production artefact
 **Design:** Clean Architecture (`domain ← port ← service ← adapter ← pkg`); the observability contract is [`docs/observability/`](docs/observability/README.md) and the registry rendered at [`docs/observability/metric-registry.md`](docs/observability/metric-registry.md). The registry imports platform-events' and platform-pgcommon's released registries verbatim — where they conflict, their released contract wins. Every HTTP error is an [RFC 9457](docs/problem-details/README.md) problem (`application/problem+json`). Release `v2.0.0` moves the module to `.../platform-gincommon/v2` for that breaking change; `v1.4.0` shipped earlier breaking changes as a MINOR — a [recorded exception](VERSIONING.md#recorded-exceptions).
 
 ---
@@ -237,7 +237,7 @@ export GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*
 go get github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2@v2.0.0
 ```
 
-Go 1.26+ (the `go 1.26.0` directive does not force consumers onto 1.26.9). Pin a tag — never `@latest`. Requests must arrive through the trusted API gateway, which authenticates the caller and injects `x-user-id`/`x-tenant-id`/`x-tenant-roles`; the service must not be reachable around the gateway.
+Go 1.26+ (the `go 1.26.0` directive does not force consumers onto 1.26.10). Pin a tag — never `@latest`. Requests must arrive through the trusted API gateway, which authenticates the caller and injects `x-user-id`/`x-tenant-id`/`x-tenant-roles`; the service must not be reachable around the gateway.
 
 ### 2. HTTP service
 
@@ -636,7 +636,7 @@ v1.4.0 breaks the v1.x API as a [recorded exception](VERSIONING.md#recorded-exce
 
 ### Prerequisites
 
-- Go 1.26+ (the `toolchain go1.26.9` line is fetched automatically)
+- Go 1.26+ (the `toolchain go1.26.10` line is fetched automatically)
 - Docker — only for the optional observability stack (`make docker-up`) and the image smoke gate
 - `GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*` and access to the BCBP org
 - GNU `timeout` for `make test-smoke-image` (`brew install coreutils` on macOS)
@@ -979,7 +979,7 @@ make docker-build
 docker run --rm -p 8080:8080 -e APP_ENV=prod -e OBSERVABILITY_DOMAIN=iam platform-gincommon:local
 ```
 
-Two-stage `Dockerfile`: digest-pinned `golang:1.26.9-alpine` builder, digest-pinned `alpine:3.21` runtime (`USER nobody`), `EXPOSE 8080`, `HEALTHCHECK` on `/health`. `alpine:3.21` reaches end of support around November 2026 — bump it and run `make pin-base-images`.
+Two-stage `Dockerfile`: digest-pinned `golang:1.26.10-alpine` builder, digest-pinned `alpine:3.21` runtime (`USER nobody`), `EXPOSE 8080`, `HEALTHCHECK` on `/health`. `alpine:3.21` reaches end of support around November 2026 — bump it and run `make pin-base-images`.
 
 ### Health
 

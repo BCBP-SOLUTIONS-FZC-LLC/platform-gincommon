@@ -6,7 +6,7 @@
 |---|---|
 | Document type | Low-Level Design (LLD) |
 | Component | `platform-gincommon` (shared Gin HTTP + gRPC transport and observability library) |
-| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` (`go 1.26.0`, `toolchain go1.26.9`) |
+| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` (`go 1.26.0`, `toolchain go1.26.10`) |
 | Status | `v2.0.0` released 2026-10-16: RFC 9457 Problem Details error contract, `/v2` module path |
 | Previous release | `v1.6.0` (2026-10-03). The 11 IAM services pin `v1.6.0` (10) and `v1.5.0` (`iam-org-membership`); none is on `/v2` yet (§18.1) |
 | Governing standard | Enterprise Platform Observability Standard ([`docs/observability/README.md`](../observability/README.md)) |
@@ -213,7 +213,7 @@ require (
 )
 ```
 
-The `go 1.26.0` directive (with `toolchain go1.26.9`) keeps consumers on any Go 1.26.x; CI builds with 1.26.9 via `setup-go`'s `go-version-file`. golangci-lint is a `go tool` dependency. `golang.org/x/net` (indirect, via gRPC/OTLP) is held at v0.60.0 and the toolchain at 1.26.9 for the 2026-10 `net/http` / HTTP/2 / `crypto/tls` advisories (GO-2026-6603 … -6617); `make vuln-check` and CI's govulncheck gate on them.
+The `go 1.26.0` directive (with `toolchain go1.26.10`) keeps consumers on any Go 1.26.x; CI builds with 1.26.10 via `setup-go`'s `go-version-file`. golangci-lint is a `go tool` dependency. `golang.org/x/net` (indirect, via gRPC/OTLP) is held at v0.60.0 and the toolchain at 1.26.10 for the 2026-10 `net/http` / HTTP/2 / `crypto/tls` advisories (GO-2026-6603 … -6617, fixed in 1.26.9) and `crypto/x509` (GO-2026-6809, fixed in 1.26.10); `make vuln-check` and CI's govulncheck gate on them.
 
 ### 3.2 Dependency rules
 
@@ -1042,7 +1042,7 @@ Boolean `OTEL_*` values are case-insensitive (`true`/`1`/`yes`, `false`/`0`/`no`
 
 ### 13.2 Demo image
 
-Two-stage `Dockerfile`: digest-pinned `golang:1.26.9-alpine` builder; digest-pinned `alpine:3.21` runtime; `USER nobody`; `EXPOSE 8080`; `HEALTHCHECK` on `/health`. Pins are verified against `.docker-digests` in CI. The smoke gate requires an image of at most 60 MB, a non-zero exit with the registry error on an invalid `OBSERVABILITY_DOMAIN`, and `/health` + `/metrics` with identity labels.
+Two-stage `Dockerfile`: digest-pinned `golang:1.26.10-alpine` builder; digest-pinned `alpine:3.21` runtime; `USER nobody`; `EXPOSE 8080`; `HEALTHCHECK` on `/health`. Pins are verified against `.docker-digests` in CI. The smoke gate requires an image of at most 60 MB, a non-zero exit with the registry error on an invalid `OBSERVABILITY_DOMAIN`, and `/health` + `/metrics` with identity labels.
 
 ### 13.3 Compatibility and release gates
 

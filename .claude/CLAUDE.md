@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-`platform-gincommon` is a **private Go shared library** (module: `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` since v2.0.0, `go 1.26.0` directive with `toolchain go1.26.9`) that provides reusable Gin HTTP and gRPC middleware for platform services. It lives in a **private GitHub repository** and is consumed as a Go module dependency by internal platform services — it is never deployed as a standalone server.
+`platform-gincommon` is a **private Go shared library** (module: `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` since v2.0.0, `go 1.26.0` directive with `toolchain go1.26.10`) that provides reusable Gin HTTP and gRPC middleware for platform services. It lives in a **private GitHub repository** and is consumed as a Go module dependency by internal platform services — it is never deployed as a standalone server.
 
 **Consuming services** must set `GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*` (or `GONOSUMDB`/`GOFLAGS` equivalents) to fetch private module versions. The `cmd/server/main.go` binary is a **reference/demo only** — it exists to exercise the middleware stack locally. The Docker image CI pushes the demo server container to GHCR; it is **not** a production artefact.
 
