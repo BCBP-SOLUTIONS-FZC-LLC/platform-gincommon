@@ -7,8 +7,8 @@
 | Document type | Low-Level Design (LLD) |
 | Component | `platform-gincommon` (shared Gin HTTP + gRPC transport and observability library) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2` (`go 1.26.0`, `toolchain go1.26.10`) |
-| Status | `v2.0.0` released 2026-10-16: RFC 9457 Problem Details error contract, `/v2` module path |
-| Previous release | `v1.6.0` (2026-10-03). The 11 IAM services pin `v1.6.0` (10) and `v1.5.0` (`iam-org-membership`); none is on `/v2` yet (§18.1) |
+| Status | `v2.1.0` released 2026-10-21: RFC 9457 extension members on problems (additive), toolchain go1.26.10 |
+| Previous release | `v2.0.0` (2026-10-16). All 11 IAM services pin `/v2` `v2.0.0` (§18.1) |
 | Governing standard | Enterprise Platform Observability Standard ([`docs/observability/README.md`](../observability/README.md)) |
 | Base HLD | IAM HLD — shared library dependencies (§15.4), Clean Architecture layout (§15.3) |
 | Sibling designs | `platform-events` (outbox, SNS/SQS, messaging metrics), `platform-pgcommon` (pgx pool, RLS GUC, DB metrics), `platform-schemagov` (event schema governance), `platform-fastapicommon` (Python port, vendors the registry) |
@@ -1246,7 +1246,7 @@ Exit codes: `0` clean, `1` error findings (including `metricslint registry` on a
 
 ### 18.1 Consuming services
 
-All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also uses `pkg/grpccommon` (`Config`, `ObservabilityUnaryInterceptors`, `Shutdown`). As of 2026-10-16 ten pin `v1.6.0` and `iam-org-membership` pins `v1.5.0`; none is on `/v2`. The README's *v2.0.0 migration status* table lists, per service, the `ErrorResponse` uses and hand-written error bodies to replace. Every service uses `Config`, `ObservabilityMiddlewares`, `TimeoutMiddleware`, `InitTracingFromEnv`, `Shutdown` and `MetricsRegisterer`; beyond that (non-test code, comments excluded):
+All 11 IAM Go services import `pkg/gincommon`, and `iam-authz-enrichment` also uses `pkg/grpccommon` (`Config`, `ObservabilityUnaryInterceptors`, `Shutdown`). As of 2026-10-21 all 11 pin `/v2` `v2.0.0`; none uses v2.1.0's extension members yet (`iam-org-membership`, whose hand-serialised `abortWithDetailedProblem` they replace, and `iam-event-consumer`, which reads `record_version` back, are the first planned adopters). The README's *v2.0.0 migration status* table lists, per service, the `ErrorResponse` uses and hand-written error bodies to replace. Every service uses `Config`, `ObservabilityMiddlewares`, `TimeoutMiddleware`, `InitTracingFromEnv`, `Shutdown` and `MetricsRegisterer`; beyond that (non-test code, comments excluded):
 
 | Service | Also uses |
 |---|---|
