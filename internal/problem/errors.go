@@ -3,6 +3,7 @@ package problem
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 )
 
@@ -11,8 +12,8 @@ import (
 // BusinessException; the New*Error constructors are its specialisations
 // (ValidationException, ResourceNotFoundException, ...).
 //
-// Only Type, Detail, Code and ValidationErrors reach the client. Err, the cause, is
-// for errors.Is/As and server-side logs: it is never rendered.
+// Only Type, Detail, Code, ValidationErrors and Extensions reach the client. Err,
+// the cause, is for errors.Is/As and server-side logs: it is never rendered.
 type Error struct {
 	// Type is the registry entry; it fixes the title and status.
 	Type Type
@@ -23,6 +24,10 @@ type Error struct {
 	Code string
 	// ValidationErrors is the validationErrors extension.
 	ValidationErrors []FieldError
+	// Extensions are RFC 9457 extension members sent at the top level of the
+	// problem (see WithExtension). They are client-visible, and an internal-error
+	// never carries any.
+	Extensions map[string]any
 	// Err is the cause. It is never sent to the client.
 	Err error
 
@@ -97,6 +102,40 @@ func (e *Error) WithCause(cause error) *Error {
 // WithFields returns e with fields appended to its validationErrors.
 func (e *Error) WithFields(fields ...FieldError) *Error {
 	e.ValidationErrors = append(e.ValidationErrors, fields...)
+	return e
+}
+
+// WithExtension returns e with the extension member name set to value, e.g. the
+// version a client needs to retry an optimistic-lock conflict:
+//
+//	problem.NewConflictError("The tenant was modified concurrently.").
+//		WithExtension("record_version", 7)
+//
+// The member is sent at the top level of the problem body, after the standard
+// members. A name that is not a ValidExtensionName (a standard or platform member
+// such as "status" or "traceId", or not a letter followed by letters, digits or
+// "_", 3+ characters) is dropped when the problem is built, so it can never replace
+// a standard member. value is marshalled with encoding/json and is client-visible:
+// never put error text, SQL, secrets, tokens or tenant data in it. An
+// internal-error drops every extension, as it drops its detail.
+func (e *Error) WithExtension(name string, value any) *Error {
+	if e.Extensions == nil {
+		e.Extensions = make(map[string]any)
+	}
+	e.Extensions[name] = value
+	return e
+}
+
+// WithExtensions returns e with every entry of ext set as an extension member (see
+// WithExtension); later values replace earlier ones of the same name.
+func (e *Error) WithExtensions(ext map[string]any) *Error {
+	if len(ext) == 0 {
+		return e
+	}
+	if e.Extensions == nil {
+		e.Extensions = make(map[string]any, len(ext))
+	}
+	maps.Copy(e.Extensions, ext)
 	return e
 }
 

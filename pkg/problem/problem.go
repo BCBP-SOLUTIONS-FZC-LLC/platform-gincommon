@@ -18,6 +18,21 @@
 //	  "timestamp": "2026-10-15T10:45:22Z"
 //	}
 //
+// A problem may also carry RFC 9457 §3.2 extension members for its type, set with
+// Error.WithExtension (or Builder.Extension) and read back with Problem.Extension.
+// They follow the standard members, sorted by name:
+//
+//	gincommon.AbortWithProblem(c, problem.NewConflictError("The tenant was modified concurrently.").
+//		WithExtension("record_version", 7))
+//
+//	{"type": ".../platform/conflict", "title": "Conflict", "status": 409, ..., "record_version": 7}
+//
+// A standard member always wins: a name that is not a ValidExtensionName (any
+// standard or platform member, in any letter case, or a name outside RFC 9457's
+// letter + [A-Za-z0-9_], 3+ characters) is dropped. Extensions are client-visible,
+// so they carry no error text or secrets, and an internal-error drops them all, as
+// it drops its detail.
+//
 // The specification's exception names map to Go as follows: ProblemDetailsBuilder
 // is Builder; BusinessException is Error (NewError with a domain Type);
 // ValidationException, ResourceNotFoundException, ConflictException,
@@ -163,6 +178,12 @@ func NewInternalError(cause error) *Error { return problem.NewInternalError(caus
 // else 500 internal-error without detail.
 func FromError(err error) *Error { return problem.FromError(err) }
 
+// ValidExtensionName reports whether name may be sent as an extension member: RFC
+// 9457 §3.2's letter + [A-Za-z0-9_], 3+ characters, and not a standard or platform
+// member in any letter case. Other names are dropped when a problem is built or
+// serialised.
+func ValidExtensionName(name string) bool { return problem.ValidExtensionName(name) }
+
 // FormatTimestamp formats t with TimestampLayout.
 func FormatTimestamp(t time.Time) string { return problem.FormatTimestamp(t) }
 
@@ -184,7 +205,7 @@ func NewTraceID() string { return problem.NewTraceID() }
 // IsProblemContentType reports whether v is application/problem+json.
 func IsProblemContentType(v string) bool { return problem.IsProblemContentType(v) }
 
-// Decode parses a problem body (unknown members are ignored).
+// Decode parses a problem body; unrecognised members are kept in Extensions.
 func Decode(r io.Reader) (*Problem, error) { return problem.Decode(r) }
 
 // FromResponse parses resp's problem body; ErrNotProblem when it is not one. Branch

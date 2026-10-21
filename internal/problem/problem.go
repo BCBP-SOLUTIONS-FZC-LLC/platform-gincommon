@@ -25,6 +25,13 @@ const TimestampLayout = "2006-01-02T15:04:05Z"
 // extensions are TraceID, ErrorCode, TenantID, Timestamp and ValidationErrors.
 // Optional members are omitted when empty, so a 5xx carries no detail. Field order
 // matches the platform specification.
+//
+// Extensions holds RFC 9457 §3.2 extension members a service adds for one problem
+// type (e.g. record_version on a conflict). They are serialised as top-level members
+// after the standard ones, sorted by name; a name that is not a ValidExtensionName,
+// including any standard or platform member name, is dropped, so a standard member
+// always wins. Decode and FromResponse fill Extensions with every member they do
+// not recognise.
 type Problem struct {
 	// Type is the absolute, stable type URI ({base}/{domain}/{error}), or
 	// "about:blank" for a status without a registered type (RFC 9457 §4.2.1).
@@ -48,6 +55,10 @@ type Problem struct {
 	Timestamp string `json:"timestamp,omitempty"`
 	// ValidationErrors lists the invalid fields of a validation-failed problem.
 	ValidationErrors []FieldError `json:"validationErrors,omitempty"`
+	// Extensions are the problem's extension members, keyed by member name. They are
+	// client-visible: never put error text, SQL, secrets, tokens or tenant data in
+	// them. An internal-error never carries any (see Builder.Build).
+	Extensions map[string]any `json:"-"`
 }
 
 // FieldError is one entry of the validationErrors extension.

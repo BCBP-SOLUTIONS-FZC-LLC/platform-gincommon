@@ -3,6 +3,7 @@ package middleware_test
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -185,9 +186,15 @@ func TestWriteProblem_PanickingLoggerIgnored(t *testing.T) {
 	r := gin.New()
 	r.Use(middleware.ProblemMiddleware(middleware.ProblemSettings{Logger: panickingLogger{&recordingLogger{}}}))
 	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusConflict) })
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
-	if w.Code != http.StatusConflict || w.Header().Get("Content-Type") != problem.ContentType {
-		t.Fatalf("response = %d %q", w.Code, w.Header().Get("Content-Type"))
+	// An unmarshallable extension also logs "problem extensions dropped" through the same logger.
+	r.GET("/nan", func(c *gin.Context) {
+		middleware.WriteProblem(c, problem.NewConflictError("Conflict.").WithExtension("score", math.NaN()))
+	})
+	for _, path := range []string{"/x", "/nan"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusConflict || w.Header().Get("Content-Type") != problem.ContentType {
+			t.Fatalf("%s: response = %d %q", path, w.Code, w.Header().Get("Content-Type"))
+		}
 	}
 }

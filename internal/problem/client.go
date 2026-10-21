@@ -23,8 +23,10 @@ func IsProblemContentType(v string) bool {
 	return err == nil && mt == ContentType
 }
 
-// Decode parses a problem body. Unknown members are ignored, so a newer server's
-// extensions do not break older clients.
+// Decode parses a problem body. Members it does not recognise are kept in
+// Problem.Extensions (numbers as json.Number), so a client can read a server's
+// extension members (see Problem.Extension), and a newer server's extensions do not
+// break older clients.
 func Decode(r io.Reader) (*Problem, error) {
 	var p Problem
 	if err := json.NewDecoder(io.LimitReader(r, MaxClientBodyBytes)).Decode(&p); err != nil {

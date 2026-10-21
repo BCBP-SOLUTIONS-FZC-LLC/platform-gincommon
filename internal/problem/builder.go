@@ -22,6 +22,7 @@ type Builder struct {
 	traceID   string
 	tenantID  string
 	fields    []FieldError
+	ext       map[string]any
 	timestamp time.Time
 }
 
@@ -30,13 +31,14 @@ func NewBuilder(t Type) *Builder {
 	return &Builder{t: t}
 }
 
-// BuilderFor starts a problem from e: its type, detail, errorCode and validationErrors.
-// A nil e is a 500 internal-error.
+// BuilderFor starts a problem from e: its type, detail, errorCode, validationErrors
+// and extension members. A nil e is a 500 internal-error.
 func BuilderFor(e *Error) *Builder {
 	if e == nil {
 		return NewBuilder(TypeInternalError)
 	}
-	return &Builder{t: e.Type, detail: e.Detail, code: e.Code, fields: e.ValidationErrors}
+	b := &Builder{t: e.Type, detail: e.Detail, code: e.Code, fields: e.ValidationErrors}
+	return b.Extensions(e.Extensions)
 }
 
 // TypeBase sets the type URI base (default DefaultTypeBase).
@@ -63,12 +65,34 @@ func (b *Builder) ValidationErrors(fields ...FieldError) *Builder {
 	return b
 }
 
+// Extension sets the extension member name to value (RFC 9457 §3.2), replacing an
+// earlier value of the same name. A name that is not a ValidExtensionName (a
+// standard or platform member, or not letter + [A-Za-z0-9_], 3+ characters) is
+// dropped by Build. value is sent to the client as JSON: never error text, SQL,
+// secrets, tokens or tenant data.
+func (b *Builder) Extension(name string, value any) *Builder {
+	if b.ext == nil {
+		b.ext = make(map[string]any)
+	}
+	b.ext[name] = value
+	return b
+}
+
+// Extensions sets every entry of ext as an extension member (see Extension).
+func (b *Builder) Extensions(ext map[string]any) *Builder {
+	for name, v := range ext {
+		b.Extension(name, v)
+	}
+	return b
+}
+
 // Timestamp sets the timestamp extension (default: the time Build runs).
 func (b *Builder) Timestamp(t time.Time) *Builder { b.timestamp = t; return b }
 
 // Build returns the problem. A type without a status is sent as 500. An
-// internal-error never carries a detail or validationErrors, whatever was set, so
-// an exception message cannot leak through it.
+// internal-error never carries a detail, validationErrors or extension members,
+// whatever was set, so an exception message cannot leak through it. Extensions
+// whose name is not a ValidExtensionName are dropped.
 func (b *Builder) Build() Problem {
 	t := b.t
 	if t.Status == 0 {
@@ -100,9 +124,11 @@ func (b *Builder) Build() Problem {
 	if len(b.fields) > 0 {
 		p.ValidationErrors = append([]FieldError(nil), b.fields...)
 	}
+	p.Extensions = validExtensions(b.ext)
 	if t.ID() == TypeInternalError.ID() {
 		p.Detail = ""
 		p.ValidationErrors = nil
+		p.Extensions = nil
 	}
 	return p
 }

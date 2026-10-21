@@ -469,6 +469,9 @@ func jsonMembers(t reflect.Type) []string {
 	var out []string
 	for i := range t.NumField() {
 		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "-" {
+			continue // Extensions: serialised as top-level members by MarshalJSON
+		}
 		out = append(out, name)
 	}
 	return sortStrings(out)
