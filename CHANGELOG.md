@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-21
+
+> **Versioning:** a MINOR release on the `/v2` module path — additive only (RFC 9457 extension members). Nothing changes for problems without extensions: their JSON is byte-for-byte identical to v2.0.0.
+
 ### Security
 
 - **Toolchain `go1.26.9` → `go1.26.10`**, fixing GO-2026-6809 / CVE-2026-111943 in `crypto/x509` (HIGH), which failed CI's `govulncheck` step and the Trivy scan of the demo image's Go binary. The demo image builder is re-pinned to `golang:1.26.10-alpine@sha256:9ce231b2…f7ca` (`.docker-digests` updated). The `go 1.26.0` directive is unchanged, so consumers are not forced onto a newer Go.
