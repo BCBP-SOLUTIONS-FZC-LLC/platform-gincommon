@@ -25,7 +25,8 @@ import (
 // reaches the client.
 
 // AbortWithProblem classifies err (ClassifyError), writes it as a problem with the
-// request's traceId, instance and verified tenantId, aborts the chain and logs a
+// request's traceId, instance and verified tenantId (and the *problem.Error's
+// extension members, see problem.Error.WithExtension), aborts the chain and logs a
 // warn-level "problem response" entry. If the response was already written it only
 // aborts. A nil err is a 500 internal-error.
 func AbortWithProblem(c *gin.Context, err error) {

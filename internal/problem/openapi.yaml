@@ -12,7 +12,11 @@ components:
   schemas:
     ProblemDetails:
       type: object
-      description: RFC 9457 problem details with the platform extensions.
+      description: >-
+        RFC 9457 problem details with the platform extensions. A problem type may add
+        its own extension members (RFC 9457 §3.2), sent at the top level after the
+        members below; a service documents them by extending this schema with allOf.
+        Clients ignore extension members they do not know.
       required: [type, title, status]
       properties:
         type:
@@ -63,6 +67,7 @@ components:
           description: Invalid fields of a validation-failed problem.
           items:
             $ref: "#/components/schemas/ValidationError"
+      # Extension members (problem.Error.WithExtension): letter + [A-Za-z0-9_], 3+ characters.
       additionalProperties: true
     ValidationError:
       type: object

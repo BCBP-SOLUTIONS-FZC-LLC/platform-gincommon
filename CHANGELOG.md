@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **RFC 9457 §3.2 extension members** on problems (additive; MINOR, planned v2.1.0). Services no longer need to hand-serialise a problem to add members such as `record_version`, which bypassed `AbortWithProblem`'s enrichment and logging.
+  - `problem.Problem.Extensions map[string]any`, serialised as top-level members after the standard ones, sorted by name. A problem without extensions serialises byte-for-byte as before.
+  - `(*problem.Error).WithExtension(name, value)` and `WithExtensions(map)`; `(*problem.Builder).Extension(name, value)` and `Extensions(map)`; `BuilderFor` copies an error's extensions. `WriteProblem` / `AbortWithProblem` / the global error handler carry them through with traceId, instance, verified tenantId and logging unchanged.
+  - `problem.ValidExtensionName(name)`: RFC 9457's letter + `[A-Za-z0-9_]`, 3+ characters, and not a standard or platform member in any letter case. Other names are **dropped**, so an extension can never overwrite `status`, `traceId`, `tenantId` or any other standard member.
+  - An `internal-error` drops every extension, as it drops its detail.
+  - An extension value that cannot be marshalled is dropped with the rest of the extensions, the problem is still sent, and a warn-level `problem extensions dropped` entry is logged (never the values).
+  - `Decode` / `FromResponse` keep every unrecognised top-level member in `Extensions` (numbers as `json.Number`); `(*problem.Problem).Extension(name, &dst)` decodes one into a typed value.
+  - The shared `ProblemDetails` OpenAPI schema documents extension members (it already allowed additional properties).
+
 ## [2.0.0] - 2026-10-16
 
 > **Versioning:** this release is **v2.0.0**, a proper MAJOR with the `/v2` module path (`github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2`), not a recorded exception. Follow *Upgrading to v2.0.0* in `README.md` and the migration table in `docs/problem-details/README.md`.

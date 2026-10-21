@@ -66,10 +66,10 @@ Five public packages and one CLI. Source of truth: `go doc ./pkg/<name>`; the ta
 
 | Group | Symbols | Purpose |
 |---|---|---|
-| Model | `Problem`, `FieldError`, `ContentType`, `FormatTimestamp` | The platform error body: `type`, `title`, `status`, `detail`, `instance` + `traceId`, `errorCode`, `tenantId`, `timestamp`, `validationErrors` |
+| Model | `Problem`, `FieldError`, `ContentType`, `FormatTimestamp`, `ValidExtensionName`, `Problem.Extension` | The platform error body: `type`, `title`, `status`, `detail`, `instance` + `traceId`, `errorCode`, `tenantId`, `timestamp`, `validationErrors`, then any RFC 9457 extension members (`Problem.Extensions`) |
 | Registry | `Type`, `Type*` (15 platform types), `PlatformTypes()`, `NewType`/`MustType`, `TypeForStatus`, `TypeURI`, `DefaultTypeBase` | `{base}/{domain}/{error}` URIs — see [registry.md](docs/problem-details/registry.md) |
-| Errors | `Error`, `NewError`, `NewValidationError`, `NewBadRequestError`, `NewUnauthorizedError`, `NewForbiddenError`, `NewNotFoundError`, `NewConflictError`, `NewBusinessRuleError`, `NewRateLimitError`, `NewNotImplementedError`, `NewServiceUnavailableError`, `NewInternalError`, `FromError` | What handlers return; a cause is kept for `errors.Is`/`As` and never sent |
-| Builder | `Builder`, `NewBuilder(t)`, `BuilderFor(err)` | Gateways/BFFs building their own problems; strips any detail from `internal-error` |
+| Errors | `Error`, `NewError`, `NewValidationError`, `NewBadRequestError`, `NewUnauthorizedError`, `NewForbiddenError`, `NewNotFoundError`, `NewConflictError`, `NewBusinessRuleError`, `NewRateLimitError`, `NewNotImplementedError`, `NewServiceUnavailableError`, `NewInternalError`, `FromError`, `Error.WithExtension`/`WithExtensions` | What handlers return; a cause is kept for `errors.Is`/`As` and never sent |
+| Builder | `Builder`, `NewBuilder(t)`, `BuilderFor(err)`, `Builder.Extension`/`Extensions` | Gateways/BFFs building their own problems; strips any detail and extension from `internal-error` |
 | Correlation | `ResolveTraceID`, `TraceIDFromTraceparent`, `SanitizeRequestID`, `NewTraceID` | `traceparent` → `x-request-id` → span → generated (platform-pgcommon-py's order) |
 | Clients | `FromResponse(resp)`, `Decode(r)`, `IsProblemContentType`, `ErrNotProblem` | Parse problems; branch on `Status`/`Type`/`ErrorCode`, never on text |
 | OpenAPI | `OpenAPIComponents()`, `StandardResponses()` | Shared `ProblemDetails` schema and the 400/401/403/404/409/422/429/500 responses |
@@ -596,7 +596,7 @@ if p, err := problem.FromResponse(resp); err == nil {
 }
 ```
 
-Branch on `Status`, `Type` and `ErrorCode`, never on `Title`/`Detail` text. Use `traceId` to find the trace in Tempo and the `problem response` log line. Mapping table, validation, gateway behaviour and OpenAPI: [docs/problem-details](docs/problem-details/README.md).
+Branch on `Status`, `Type` and `ErrorCode`, never on `Title`/`Detail` text; read a type's extension members with `p.Extension("record_version", &v)`. Use `traceId` to find the trace in Tempo and the `problem response` log line. Mapping table, validation, gateway behaviour and OpenAPI: [docs/problem-details](docs/problem-details/README.md).
 
 ### 9. Rate limits
 

@@ -35,6 +35,40 @@ From v2.0.0, every HTTP error that gincommon writes, and every error a handler r
 | `tenantId` | no | Only for a request with a **verified** tenant context (after `ContextMiddleware` built the `RequestContext`). It is never on a 401 |
 | `timestamp` | yes | RFC 3339 UTC, second precision |
 | `validationErrors` | no | `[{field, message}]` for `platform/validation-failed` |
+| *extension members* | no | A type's own members (`Error.WithExtension`), after the standard ones; see [Extension members](#extension-members) |
+
+### Extension members
+
+A problem type may carry its own [RFC 9457 §3.2](https://www.rfc-editor.org/rfc/rfc9457#section-3.2) extension members, for data a client acts on (the version to retry an optimistic-lock conflict with, the workflows blocking a removal, a retry delay). Set them on the error; `AbortWithProblem`, `c.Error` and `Builder` all carry them to the body with the usual enrichment and logging:
+
+```go
+gincommon.AbortWithProblem(c, problem.NewConflictError("The tenant was modified concurrently.").
+	WithCode("VERSION_CONFLICT").
+	WithExtension("record_version", 7))
+```
+
+```json
+{
+  "type": "https://errors.company.com/platform/conflict",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "The tenant was modified concurrently.",
+  "instance": "/api/tenants/t1",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "errorCode": "VERSION_CONFLICT",
+  "tenantId": "tenant-001",
+  "timestamp": "2026-10-15T10:45:22Z",
+  "record_version": 7
+}
+```
+
+- **Order.** Extensions follow the standard members, sorted by name, so the body is deterministic. A problem without extensions is byte-for-byte what v2.0.0 sent.
+- **Names.** RFC 9457's recommendation: a letter, then letters, digits or `_`, at least three characters (`problem.ValidExtensionName`).
+- **A standard member always wins.** A name that collides with a standard or platform member (`type`, `title`, `status`, `detail`, `instance`, `traceId`, `errorCode`, `tenantId`, `timestamp`, `validationErrors`), in any letter case, or that is not a valid name, is **dropped**, not rejected: the problem is still sent, without that member. This mirrors how the builder drops a detail from an `internal-error` and how an invalid `x-request-id` is ignored; an error path never panics or fails over a bad extension.
+- **No leaks.** Extensions are client-visible, like `detail`: never put `err.Error()`, SQL, secrets, tokens or tenant data in them. An `internal-error` drops every extension, as it drops its detail. Other 5xx types (e.g. a 503 with `retry_after_seconds`) keep theirs.
+- **Unmarshallable values.** Values are marshalled with `encoding/json`. If one fails (a channel, a NaN), the problem is sent without extensions and a warn-level `problem extensions dropped` entry (`traceId`, `type`, `status`, `errorCode`, `service`; never the values) is logged.
+- **Logging is unchanged.** The `problem response` entry never contains extension values.
+- **OpenAPI.** `ProblemDetails` allows additional properties; document a type's extensions by extending it with `allOf`.
 
 ## Reporting errors from handlers
 
@@ -251,7 +285,16 @@ if resp.StatusCode >= 400 {
 }
 ```
 
-Branch on `Status`, `Type` and `ErrorCode`, and surface `Title`, `Detail` and `TraceID` to the user or the log. Never parse `Title` or `Detail` text. `FromResponse` ignores unknown members, so newer extensions do not break older clients.
+Branch on `Status`, `Type` and `ErrorCode`, and surface `Title`, `Detail` and `TraceID` to the user or the log. Never parse `Title` or `Detail` text. `FromResponse` and `Decode` keep every member they do not recognise in `Problem.Extensions` (numbers as `json.Number`, so large ids and versions are not rounded), so newer extensions do not break older clients and a client can read the ones it knows:
+
+```go
+var version int64
+if ok, err := p.Extension("record_version", &version); ok && err == nil {
+	// retry the update with version
+}
+```
+
+Decoding is lenient: a third-party body's members are kept whatever their names; only the server side applies the name rules.
 
 ## Events and messaging
 

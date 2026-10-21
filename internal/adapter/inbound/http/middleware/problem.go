@@ -121,7 +121,10 @@ func ClassifyError(err error, bind bool) *problem.Error {
 
 // WriteProblem writes perr as an application/problem+json response, aborts the
 // chain and logs it. traceId, instance and (for a verified tenant context) tenantId
-// come from the request. A nil perr is a 500 internal-error.
+// come from the request; perr's extension members follow the standard members. If
+// an extension value cannot be marshalled, the problem is sent without extensions
+// and a warn-level "problem extensions dropped" entry is logged. A nil perr is a
+// 500 internal-error.
 func WriteProblem(c *gin.Context, perr *problem.Error) {
 	if perr == nil {
 		perr = problem.NewInternalError(nil)
@@ -138,7 +141,14 @@ func WriteProblem(c *gin.Context, perr *problem.Error) {
 
 	attachCorrelationHeaders(c, traceIDFromContext(c), requestIDFromContext(c))
 	c.Abort()
-	body, _ := json.Marshal(p) // cannot fail: Problem has only strings, ints and string slices
+	body, err := json.Marshal(p)
+	if err != nil {
+		// Only an extension value can fail to marshal (a channel, a NaN, a failing
+		// MarshalJSON): send the problem without its extensions rather than no problem.
+		p.Extensions = nil
+		body, _ = json.Marshal(p) // cannot fail: the standard members are strings, ints and string slices
+		logDroppedExtensions(s, p)
+	}
 	c.Data(p.Status, problem.ContentType, body)
 	logProblem(s, p)
 	if perr.Unclassified() {
@@ -201,6 +211,26 @@ func logProblem(s ProblemSettings, p problem.Problem) {
 		fields["tenantId"] = p.TenantID
 	}
 	s.Logger.Warn("problem response", service.Sanitize(fields))
+}
+
+// logDroppedExtensions emits the warn-level "problem extensions dropped" entry for a
+// problem whose extension members could not be marshalled: a programming defect in
+// the service that set them. It never logs the values or the marshal error's text.
+func logDroppedExtensions(s ProblemSettings, p problem.Problem) {
+	if s.Logger == nil {
+		return
+	}
+	defer func() { _ = recover() }() // the response is not affected by the logger
+	fields := map[string]any{
+		"traceId":   p.TraceID,
+		"type":      p.Type,
+		"status":    p.Status,
+		"errorCode": p.ErrorCode,
+	}
+	if s.Service != "" {
+		fields["service"] = s.Service
+	}
+	s.Logger.Warn("problem extensions dropped", service.Sanitize(fields))
 }
 
 // logUnclassified emits the error-level "unclassified error" entry for a 500 that
