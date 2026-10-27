@@ -194,12 +194,13 @@ Local docker-compose stack only — **never read by the library**, defaults in `
 - `test/fixtures/` — shared test helpers (MockLogger, HTTP helpers, `DecodeProblem` / `IsProblemType` for RFC 9457 bodies)
 - `test/testenv/` — loads `.env` (if present) for tests and defaults `OBSERVABILITY_DOMAIN=iam`, `ENVIRONMENT=test`
 
-## Current Status (2026-10-16)
+## Current Status (2026-10-27)
 
-- **v2.0.0** (RFC 9457 error contract, `/v2` module path, go1.26.9 / x/net v0.60.0 security fix) is merged to `main`; the release PR (#41, CHANGELOG `[2.0.0]`) precedes the `v2.0.0` tag. v1.4.x–v1.6.x is the previous major (security fixes only).
-- **Consumers:** the 11 IAM services pin `v1.6.0` (ten) and `v1.5.0` (`iam-org-membership`); none is on `/v2`. Their v2 migration effort (`ErrorResponse` uses, hand-written error bodies, `TimeoutMiddleware` placement) is tabulated in README → *Platform dependencies*.
+- **v2.1.0** (RFC 9457 extension members, `go1.26.10` security fix) is the latest release on `main` (2026-10-21, PR #48). v2.0.0 (RFC 9457 error contract, `/v2` module path) is the previous MAJOR; v1.4.x–v1.6.x is the prior major (security fixes only).
+- **Consumers:** all 11 IAM Go services have migrated to `/v2` and pin `v2.0.0`; none uses v2.1.0's extension members yet (`iam-org-membership` and `iam-event-consumer` are the first planned adopters). Their migration status (remaining `ErrorResponse` uses, hand-written error bodies, `TimeoutMiddleware` placement) is tabulated in README → *Platform dependencies*.
 - **Cross-language parity:** platform-fastapicommon `main` implements the same RFC 9457 contract; platform-interop-tests' `error_shape` check requires the Go and Python 401 to be the same problem.
 - **OQ-24 / OQ-25 resolved:** an unclassified 500 / gRPC `Internal` logs an ERROR `unclassified error` entry (diagnostics; never the error text) and increments `platform_unclassified_errors_total{transport}` (alerting: `PlatformUnclassifiedErrors`).
+- **Domain vocabulary:** `bff` added to the approved `domain` label values in `registry.json` (unreleased). BFF services can now set `Config.Domain = "bff"` or `OBSERVABILITY_DOMAIN=bff` without a startup panic.
 
 ## Key Design Decisions
 

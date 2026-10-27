@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Registry: `bff` added to the approved `domain` label vocabulary** (`internal/obsregistry/registry.json`). BFF (Backend-for-Frontend) services can now set `Config.Domain = "bff"` (or `OBSERVABILITY_DOMAIN=bff`) without a startup panic. `docs/observability/metric-registry.md` regenerated via `make metrics-inventory`.
+
 ## [2.1.0] - 2026-10-21
 
 > **Versioning:** a MINOR release on the `/v2` module path — additive only (RFC 9457 extension members). Nothing changes for problems without extensions: their JSON is byte-for-byte identical to v2.0.0.
