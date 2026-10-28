@@ -4,10 +4,11 @@ FROM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d6
 
 WORKDIR /src
 
-# --upgrade pulls patched libssl3/libcrypto3 from the 3.21 repo even when the
-# pinned base digest predates the fix (Trivy gate: CVE-2026-75804, CVE-2026-84782,
-# fixed in 3.3.7-r2). Re-pinning the base image supersedes this.
-RUN apk add --no-cache --upgrade ca-certificates libssl3 libcrypto3 git
+# --upgrade pulls patched packages from the 3.21 repo even when the pinned base
+# digest predates the fix. Re-pinning the base image supersedes this.
+# CVE-2026-75804, CVE-2026-84782: libssl3/libcrypto3 >= 3.3.7-r2
+# CVE-2026-107891: musl/musl-utils >= 1.2.5-r12
+RUN apk add --no-cache --upgrade ca-certificates libssl3 libcrypto3 musl musl-utils git
 
 COPY go.mod go.sum ./
 RUN go mod download
@@ -23,10 +24,11 @@ RUN mkdir -p /out && \
 # updates are disabled, so this is manual).
 FROM alpine:3.21@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507
 
-# --upgrade pulls patched libssl3/libcrypto3 from the 3.21 repo even when the
-# pinned base digest predates the fix (Trivy gate: CVE-2026-75804, CVE-2026-84782,
-# fixed in 3.3.7-r2). Re-pinning the base image supersedes this.
-RUN apk add --no-cache --upgrade ca-certificates libssl3 libcrypto3
+# --upgrade pulls patched packages from the 3.21 repo even when the pinned base
+# digest predates the fix. Re-pinning the base image supersedes this.
+# CVE-2026-75804, CVE-2026-84782: libssl3/libcrypto3 >= 3.3.7-r2
+# CVE-2026-107891: musl/musl-utils >= 1.2.5-r12
+RUN apk add --no-cache --upgrade ca-certificates libssl3 libcrypto3 musl musl-utils
 
 WORKDIR /app
 

@@ -187,7 +187,8 @@
         "billing",
         "tender_management",
         "notifications",
-        "documents"
+        "documents",
+        "bff"
       ],
       "cardinality": "fixed"
     },
