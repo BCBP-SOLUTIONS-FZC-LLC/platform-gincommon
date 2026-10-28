@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-28
+
+### Security
+
+- **`golang.org/x/net` v0.60.0 → v0.62.0**, resolving CVE-2026-78661 and CVE-2026-97045 (HTML rendering vulnerabilities in the `golang.org/x/net/html` package). Co-updated `x/crypto` v0.58.0, `x/sync` v0.24.0, `x/sys` v0.49.0, `x/text` v0.43.0, `x/tools` v0.51.0.
+- **Alpine `musl`/`musl-utils` upgraded to ≥ 1.2.5-r12** in both Dockerfile stages (builder and runtime), resolving CVE-2026-107891. Added to the `apk add --no-cache --upgrade` list; the pinned base image digests are unchanged.
+
 ### Changed
 
 - **Registry: `bff` added to the approved `domain` label vocabulary** (`internal/obsregistry/registry.json`). BFF (Backend-for-Frontend) services can now set `Config.Domain = "bff"` (or `OBSERVABILITY_DOMAIN=bff`) without a startup panic. `docs/observability/metric-registry.md` regenerated via `make metrics-inventory`.
