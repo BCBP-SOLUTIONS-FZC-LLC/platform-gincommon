@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-30
+
+> **Versioning:** a MINOR release on the `/v2` module path: additive only (one new `domain` value). Nothing changes for existing services.
+
 ### Changed
 
 - **Registry: `portal` added to the approved `domain` label vocabulary** (`internal/obsregistry/registry.json`). A web shell that fronts several business domains (`app.bcbpsolutions.com`: tenders, workflow design, IAM administration, the dashboard) identifies its page with `domain="portal"`; a shell dedicated to one business keeps that business domain. Its remotes are attributed with the `mfe` label, and their own Tier 2/3 metrics keep their owning domain. Decided in platform-reactcommon's frontend SDK design (§D1); the SDK's `initializeCore` rejects the shell's identity until this ships. `docs/observability/metric-registry.md` regenerated via `make metrics-inventory`.
