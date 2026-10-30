@@ -400,6 +400,16 @@ func TestDomainsAndLabels(t *testing.T) {
 	}
 }
 
+// TestDomains_Vocabulary pins the approved domain values: services panic at startup on any other
+// Config.Domain, and consumers vendor the list (platform-fastapicommon's copy, the frontend SDK's
+// generated contracts), so removing or renaming one is a breaking change.
+func TestDomains_Vocabulary(t *testing.T) {
+	want := []string{"iam", "workflow", "billing", "tender_management", "notifications", "documents", "bff", "portal"}
+	if got := obsregistry.Default().Domains(); !slices.Equal(got, want) {
+		t.Errorf("Domains() = %v, want %v", got, want)
+	}
+}
+
 func TestDomains_EmptyWithoutDomainLabel(t *testing.T) {
 	r := &obsregistry.Registry{}
 	if r.Domains() != nil || r.IsDomain("iam") {

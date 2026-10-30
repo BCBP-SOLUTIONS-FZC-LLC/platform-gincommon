@@ -307,7 +307,7 @@ Key label vocabularies:
 
 | Label | Rule |
 |---|---|
-| `domain` | `iam`, `workflow`, `billing`, `tender_management`, `notifications`, `documents`, `bff` |
+| `domain` | `iam`, `workflow`, `billing`, `tender_management`, `notifications`, `documents`, `bff`, `portal` |
 | `environment` | `local`, `dev`, `test`, `staging`, `prod` (no aliases — `production` is rejected) |
 | `service` | `^[a-z][a-z0-9_-]{0,62}$` |
 | `version` | `^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`, only on build-info metrics |
